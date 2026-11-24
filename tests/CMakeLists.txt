@@ -56,6 +56,8 @@ set_tests_properties(late_reach_verify PROPERTIES SKIP_RETURN_CODE 77 LABELS "ro
 # Determinism across thread counts (N3, D47): the same --work portfolio at 1, 2 and 4 threads gives identical bytes.
 add_test(NAME thread_determinism COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration/thread_determinism.py $<TARGET_FILE:tracemaker> ${CMAKE_BINARY_DIR}/integration/thread_determinism)
 set_tests_properties(thread_determinism PROPERTIES SKIP_RETURN_CODE 77 LABELS "route;integration" TIMEOUT 3600 PROCESSORS 4)
+add_test(NAME seed_determinism COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration/seed_determinism.py $<TARGET_FILE:tracemaker> ${CMAKE_BINARY_DIR}/integration/seed_determinism)
+set_tests_properties(seed_determinism PROPERTIES SKIP_RETURN_CODE 77 LABELS "route;integration" TIMEOUT 1800 PROCESSORS 8)
 # Coupled differential pairs (M12, D50): a USB hub's five pairs routed coupled, deterministic, KiCad-clean.
 add_test(NAME diff_pair COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration/diff_pair.py $<TARGET_FILE:tracemaker> ${CMAKE_BINARY_DIR}/integration/diff_pair)
 set_tests_properties(diff_pair PROPERTIES SKIP_RETURN_CODE 77 LABELS "route;kicad;integration" TIMEOUT 3600)
