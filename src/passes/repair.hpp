@@ -67,6 +67,7 @@ struct RepairResult {
   std::vector<RepairStep> steps;
   long work = 0;
   double seconds = 0;
+  bool time_stopped = false;  // a wall-clock limit (the loop's own, or an attempt router's) ended the attempts: which attempts ran depended on machine speed
   nlohmann::json summary() const;
 };
 
