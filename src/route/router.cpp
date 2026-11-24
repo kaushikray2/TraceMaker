@@ -130,51 +130,80 @@ struct Router::Impl {
   };
   static constexpr std::uint32_t kGenMask = 0x0FFFFFFFu;
   // The state records of a search, behind one face in two stores. Dense (the default): one vector sized to the largest
-  // window seen, exactly as it has always been. Paged (--paged-nodes): blocks of 2^16 records (1 MB), allocated on first
-  // touch and stamped with the search generation that cleared them, so a search pays only for the states it touches and
+  // window seen, exactly as it has always been. Paged (--paged-nodes): the board lattice is cut into 16x16-cell tiles
+  // and one block holds every state of a tile (all layers, all direction states of its 256 cells), allocated on first
+  // touch and stamped with the search generation that cleared it, so a search pays only for the tiles it touches and
   // a new search clears nothing up front: a block whose stamp is not the current generation is cleared when next
-  // touched, and an untouched state reads as the never-written record {0, 0, -1}, whose tag matches no live generation.
-  // The --search-mem budget binds the paged store at touch time, per search: it counts the blocks a search newly
-  // allocates, measured from the snapshot of `used` taken when the search began, not the blocks the store retains
-  // from earlier searches (the option is one search's state records at most). A block allocated past the budget
-  // still serves the expansion that asked for it (the overshoot is bounded by one expansion's new blocks) and flags
-  // the overflow, and the search then stops as Miss::Budget -- the refusal D199 ends at, reached only when the
-  // memory is really touched. Retained blocks are never freed between searches; they are bounded by the largest
-  // window's directory, the same bound as the dense vector.
+  // touched, and an untouched state reads as the never-written record {0, 0, -1}, whose tag matches no live
+  // generation. Tiles are board-global (not window-local), so blocks survive from one search to the next as long as
+  // the board and the direction-state count stand; a via step stays inside the tile's block, where the flat 2^16
+  // striping this replaces charged a fresh 1 MB block per strip a compact search crossed. The --search-mem budget
+  // binds the paged store at touch time, per search: it counts the blocks a search touches (stamps for its
+  // generation), so whether a block was retained by an earlier search over the same ground cannot decide whether
+  // this search is over budget (hardening #15). A block allocated past the budget still serves the expansion that
+  // asked for it (the overshoot is bounded by one expansion's new blocks) and flags the overflow, and the search
+  // then stops as Miss::Budget -- the refusal D199 ends at, reached only when the memory is really touched.
+  // Retained blocks are released when what is retained passes the budget (hardening #15), and when the tile
+  // geometry changes (another board, or the other direction-state count), which makes every retained record
+  // meaningless anyway.
   struct NodeStore {
-    static constexpr std::size_t kBlockShift = 16;
-    static constexpr std::size_t kBlock = std::size_t{1} << kBlockShift;  // states per block
+    static constexpr int kTileShift = 4;                            // 16 cells per tile side
+    static constexpr std::size_t kTileCells = std::size_t{1} << (2 * kTileShift);  // 256 cells per tile
     struct Block {
       std::uint32_t epoch = 0;  // the search generation the records were cleared for (0 = none)
-      std::array<SNode, kBlock> v;
+      std::unique_ptr<SNode[]> v;  // cap records: ((cell in tile) * layers + layer) * dirs + dir
     };
     bool paged = false;
     std::vector<SNode> dense;
-    std::vector<std::unique_ptr<Block>> blocks;  // the block directory (paged only)
+    std::vector<std::unique_ptr<Block>> blocks;  // the tile directory, tiles_y * tiles_x entries (paged only)
     std::uint32_t epoch = 0;                     // the current search generation (paged only)
     std::size_t budget = 0;                      // bytes of blocks one search may touch (0 = no limit)
-    std::size_t used = 0;                        // bytes the blocks take now
-    std::size_t touched = 0;                    // bytes of blocks this search has stamped for its generation (the budget counts these)
+    std::size_t used = 0;                        // bytes the blocks in the directory take now
+    std::size_t touched = 0;                     // bytes of blocks this search has stamped for its generation (the budget counts these)
     bool overflowed = false;                     // this search touched more blocks than the budget holds
+    // Tile geometry and the current search's window (paged only), set by prepare().
+    int tiles_x = 0, tiles_y = 0;
+    std::size_t cap = 0;        // records per block: kTileCells * layers * dirs
+    std::size_t dirs = 1;       // direction states per layer-cell (1 or 9)
+    std::size_t cells = 0;      // the window's cells (the flat index divides by it)
+    int win_w = 0;              // the window's width in cells
+    int win_x0 = 0, win_y0 = 0;  // the window's origin on the board lattice
+    std::size_t block_bytes() const { return sizeof(Block) + cap * sizeof(SNode); }
 
     // Once per search, before the generation is bumped: the dense store grows as it always has; the paged store
-    // sizes its directory to the window's states and takes the search's budget; retained blocks past that budget are released (below).
-    void prepare(bool use_paged, std::size_t states, std::size_t budget_bytes) {
+    // takes the search's window and budget and (re)sizes its tile directory to the board when the geometry moved.
+    void prepare(bool use_paged, std::size_t states, std::size_t budget_bytes, int w_w, int w_h, int w_x0, int w_y0,
+                 int board_nx, int board_ny, int layers, std::size_t d) {
       paged = use_paged;
       if (!paged) {
         if (dense.size() < states) dense.assign(states, SNode{0, 0, -1});
         return;
       }
       budget = budget_bytes;
+      const int ntx = (board_nx + (1 << kTileShift) - 1) >> kTileShift;
+      const int nty = (board_ny + (1 << kTileShift) - 1) >> kTileShift;
+      const std::size_t ncap = kTileCells * static_cast<std::size_t>(layers) * d;
+      if (ntx != tiles_x || nty != tiles_y || ncap != cap) {
+        blocks.clear();
+        used = 0;
+        tiles_x = ntx;
+        tiles_y = nty;
+        cap = ncap;
+        blocks.resize(static_cast<std::size_t>(tiles_x) * static_cast<std::size_t>(tiles_y));
+      }
       // A hard cap on what the store retains between searches (hardening #15): a search's records are dead once
       // it ends and blocks are only kept to be reused, so when what is retained passes the budget the blocks are
       // released outright, instead of searches over disjoint regions growing the store back towards dense size.
       if (budget_bytes > 0 && used > budget_bytes) {
         blocks.clear();
         used = 0;
+        blocks.resize(static_cast<std::size_t>(tiles_x) * static_cast<std::size_t>(tiles_y));
       }
-      const std::size_t need = (states + kBlock - 1) / kBlock;
-      if (blocks.size() < need) blocks.resize(need);
+      win_w = w_w;
+      win_x0 = w_x0;
+      win_y0 = w_y0;
+      cells = static_cast<std::size_t>(w_w) * static_cast<std::size_t>(w_h);
+      dirs = d;
     }
     // Once per search, with the search's generation: the paged store takes it as its epoch (its blocks then clear
     // lazily as they are touched); the dense store needs nothing (its records carry the generation in the tag).
@@ -193,34 +222,54 @@ struct Router::Impl {
       for (auto& b : blocks)
         if (b) b->epoch = 0;
     }
+    // The flat state index ((layer * cells + cell) * dirs + dir, cell row-major in the window) decoded to its tile
+    // block and the record's offset inside it. The window's origin places the cell on the board lattice, whose
+    // tiles the directory is cut by.
+    void locate(std::size_t i, std::size_t& blk, std::size_t& off) const {
+      const std::size_t dir = dirs > 1 ? i % dirs : 0;
+      const std::size_t lc = dirs > 1 ? i / dirs : i;
+      const std::size_t layer = lc / cells;
+      const std::size_t ci = lc - layer * cells;
+      const std::size_t cx = ci % static_cast<std::size_t>(win_w);
+      const std::size_t cy = ci / static_cast<std::size_t>(win_w);
+      const std::size_t bx = static_cast<std::size_t>(win_x0) + cx;
+      const std::size_t by = static_cast<std::size_t>(win_y0) + cy;
+      blk = (by >> kTileShift) * static_cast<std::size_t>(tiles_x) + (bx >> kTileShift);
+      off = (((cy & ((1 << kTileShift) - 1)) << kTileShift) + (cx & ((1 << kTileShift) - 1))) * (cap / kTileCells) +
+            layer * dirs + dir;
+    }
     SNode& operator[](std::size_t i) {
       if (!paged) return dense[i];
-      Block* b = blocks[i >> kBlockShift].get();
+      std::size_t blk, off;
+      locate(i, blk, off);
+      Block* b = blocks[blk].get();
       if (!b) {
         auto nb = std::make_unique<Block>();
-        used += sizeof(Block);
+        nb->v = std::make_unique<SNode[]>(cap);
+        used += block_bytes();
         b = nb.get();
-        blocks[i >> kBlockShift] = std::move(nb);
+        blocks[blk] = std::move(nb);
       }
       if (b->epoch != epoch) {
-        b->v.fill(SNode{0, 0, -1});
+        std::fill(b->v.get(), b->v.get() + cap, SNode{0, 0, -1});
         b->epoch = epoch;
         // The budget counts the blocks a search touches (stamps for its generation), not only the ones it
-        // happens to allocate first: whether a block was already retained by an earlier search over the same
-        // ground must not decide whether this search is over budget (hardening #15).
-        touched += sizeof(Block);
+        // happens to allocate first (hardening #15).
+        touched += block_bytes();
         if (budget > 0 && touched > budget) overflowed = true;
       }
-      return b->v[i & (kBlock - 1)];
+      return b->v[off];
     }
     const SNode& operator[](std::size_t i) const {
       if (!paged) return dense[i];
-      const Block* b = blocks[i >> kBlockShift].get();
+      std::size_t blk, off;
+      locate(i, blk, off);
+      const Block* b = blocks[blk].get();
       if (!b || b->epoch != epoch) {
         static const SNode kUntouched{0, 0, -1};
         return kUntouched;
       }
-      return b->v[i & (kBlock - 1)];
+      return b->v[off];
     }
   };
   NodeStore sn;
@@ -1884,7 +1933,7 @@ struct Router::Impl {
     const std::size_t cells = static_cast<std::size_t>(w.w) * static_cast<std::size_t>(w.h);
     const std::size_t D = opt.bend_states && !mem_fast_bends ? 9 : 1;  // direction states per lattice point
     const std::size_t states = cells * static_cast<std::size_t>(nl) * D;
-    sn.prepare(opt.paged_nodes, states, opt.search_mem_mb > 0 ? static_cast<std::size_t>(opt.search_mem_mb) * 1024 * 1024 : 0);
+    sn.prepare(opt.paged_nodes, states, opt.search_mem_mb > 0 ? static_cast<std::size_t>(opt.search_mem_mb) * 1024 * 1024 : 0, w.w, w.h, w.x0, w.y0, nx, ny, nl, D);
     if (cstamp.size() < cells * static_cast<std::size_t>(nl)) {
       cstamp.assign(cells * static_cast<std::size_t>(nl), 0);
       cell_state.resize(cells * static_cast<std::size_t>(nl));
