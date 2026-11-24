@@ -1910,6 +1910,8 @@ static int run_main(int argc, char** argv) {
       job.threads = r_threads;
       job.variants = r_variants;
       job.kb_path = r_nokb ? std::string() : r_kb;
+      job.seed_given = route->count("--seed") > 0;
+      job.kb_given = route->count("--kb") > 0;
       job.items_out = r_items;
       job.json_out = r_json;
       // The options as given (command line and --config), for the run report: what a reader needs to repeat the run.

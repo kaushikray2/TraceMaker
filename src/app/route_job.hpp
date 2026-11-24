@@ -24,6 +24,8 @@ struct RouteJob {
   // so the output does not depend on `threads` (D47); otherwise `threads` (wall-clock mode: one variant per thread).
   int variants = 0;
   std::string kb_path;            // knowledge base file; empty = none
+  bool seed_given = false;        // --seed was passed explicitly: the run is under the deterministic contract
+  bool kb_given = false;          // --kb was passed explicitly: the knowledge base may be used even under --seed
   std::string items_out;          // --emit-items file; empty = none
   std::string json_out;           // --json summary file; empty = none
   // --report FILE (doc 18 D3, D136): a run report for designers, HTML (or Markdown for .md), rendered from the summary alone. It adds
