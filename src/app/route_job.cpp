@@ -2319,6 +2319,7 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
   int best_open = 0;
   int best_walled = 0;              // the guard's wall price of the best board so far (guard_walls only)
   bool best_walled_proved = false;  // best_walled is a proof over the current best board (guard_walls only)
+  bool best_fit = false;            // the best board was produced under rules fitted from the input (a kept fit rung)
   // A wall proof over a board file itself: a minimal route job whose why_open classifies the board's own open
   // pins against its own copper, at its own layer count. Used after a kept chains rung -- the one rung kind that
   // changes the best board without running a route, so no rung summary carries its walls (hardening #8).
@@ -2337,6 +2338,10 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
     pj.rescue = false;
     pj.why_open = true;
     pj.why_open_output = false;
+    // Price the board under the rules that produced it: when the kept best came from a fitted-rules rung, the
+    // proof fits from the original input too (the rungs fit from job.in, never from a rung's own copper). A
+    // job-level fit_rules_from already rides along in the copy and is left alone, as the rungs leave it.
+    if (best_fit && pj.fit_rules_from.empty()) pj.fit_rules_from = job.in;
     pj.opt.work_budget = 1;
     pj.log = nullptr;
     RouteJobResult pr = run_route_job(std::move(pj));
@@ -2447,6 +2452,7 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
       best = std::move(r);
       best_tmp = tmp;
       best_open = open;
+      best_fit = rg.fit;
       if (guard_walls) {
         // The rung's walled prices the board it produced, which is now the best board: adopt it as its price.
         if (open == 0) {
