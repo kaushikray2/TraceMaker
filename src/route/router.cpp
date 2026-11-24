@@ -276,6 +276,113 @@ struct Router::Impl {
   std::vector<std::uint32_t> cstamp, vstamp;
   std::vector<std::uint8_t> cell_state, via_state;  // 0 unknown, 1 free, 2 blocked (valid when stamp matches)
   std::vector<std::int64_t> cell_hist;  // history cost per cell (valid when cstamp matches)
+  // The per-cell legality caches above (cstamp/cell_state/cell_hist, vstamp/via_state) behind the same board
+  // tiling as the NodeStore when --paged-nodes is on. Dense, they are vectors sized to the largest search window
+  // seen, so a board whose searches run near board-sized windows pays cells x layers x 18 B per variant thread
+  // whether the search touches that ground or not (the mini_mass 8-variant OOM: ~23 GB with both stores paged).
+  // Paged, a block holds one 16x16 tile: per layer a stamp/state/history triple (3,328 B), plus one via
+  // stamp/state block per tile (1,280 B), allocated on first touch. Entries keep their dense semantics exactly
+  // -- a per-entry generation stamp invalidates and the value is recomputed on a miss -- so a paged run routes
+  // identically to a dense one; only where the bytes live changes. Blocks are retained between searches for
+  // reuse and released outright when what is retained passes the --search-mem budget, the NodeStore's own
+  // retention rule. The flood/target arrays (rstamp/bstamp/is_target) stay dense: window-sized, and the stamps
+  // allocate only when the late reachability proof runs.
+  struct CompanionStore {
+    struct CellBlock {
+      std::uint32_t stamp[NodeStore::kTileCells] = {};
+      std::uint8_t state[NodeStore::kTileCells] = {};
+      std::int64_t hist[NodeStore::kTileCells] = {};
+    };
+    struct ViaBlock {
+      std::uint32_t stamp[NodeStore::kTileCells] = {};
+      std::uint8_t state[NodeStore::kTileCells] = {};
+    };
+    struct Tile {
+      std::vector<std::unique_ptr<CellBlock>> layers;
+      std::unique_ptr<ViaBlock> via;
+    };
+    bool paged = false;
+    std::vector<std::unique_ptr<Tile>> tiles;  // tiles_y * tiles_x entries
+    int tiles_x = 0, tiles_y = 0, layers = 0;
+    std::size_t used = 0;    // bytes of blocks in the directory now
+    std::size_t budget = 0;  // retention cap between searches (0 = no limit)
+    void prepare(bool use_paged, int board_nx, int board_ny, int nl, std::size_t budget_bytes) {
+      paged = use_paged;
+      if (!paged) return;
+      budget = budget_bytes;
+      const int ntx = (board_nx + (1 << NodeStore::kTileShift) - 1) >> NodeStore::kTileShift;
+      const int nty = (board_ny + (1 << NodeStore::kTileShift) - 1) >> NodeStore::kTileShift;
+      if (ntx != tiles_x || nty != tiles_y || nl != layers) {
+        tiles.clear();
+        used = 0;
+        tiles_x = ntx;
+        tiles_y = nty;
+        layers = nl;
+        tiles.resize(static_cast<std::size_t>(tiles_x) * static_cast<std::size_t>(tiles_y));
+      }
+      if (budget > 0 && used > budget) {  // retained caches are dead weight past the cap: release, as NodeStore does
+        tiles.clear();
+        used = 0;
+        tiles.resize(static_cast<std::size_t>(tiles_x) * static_cast<std::size_t>(tiles_y));
+      }
+    }
+    Tile& tile(int gx, int gy) {
+      const std::size_t blk = static_cast<std::size_t>(gy >> NodeStore::kTileShift) * static_cast<std::size_t>(tiles_x) +
+                              static_cast<std::size_t>(gx >> NodeStore::kTileShift);
+      if (!tiles[blk]) {
+        auto t = std::make_unique<Tile>();
+        t->layers.resize(static_cast<std::size_t>(layers));
+        tiles[blk] = std::move(t);
+      }
+      return *tiles[blk];
+    }
+    static std::size_t off(int gx, int gy) {
+      return static_cast<std::size_t>((gy & ((1 << NodeStore::kTileShift) - 1)) << NodeStore::kTileShift) +
+             static_cast<std::size_t>(gx & ((1 << NodeStore::kTileShift) - 1));
+    }
+    struct CellSlot { std::uint32_t* stamp; std::uint8_t* state; std::int64_t* hist; };
+    CellSlot cell(int layer, int gx, int gy) {
+      Tile& t = tile(gx, gy);
+      auto& b = t.layers[static_cast<std::size_t>(layer)];
+      if (!b) {
+        b = std::make_unique<CellBlock>();
+        used += sizeof(CellBlock);
+      }
+      const std::size_t o = off(gx, gy);
+      return {&b->stamp[o], &b->state[o], &b->hist[o]};
+    }
+    struct ViaSlot { std::uint32_t* stamp; std::uint8_t* state; };
+    ViaSlot via(int gx, int gy) {
+      Tile& t = tile(gx, gy);
+      if (!t.via) {
+        t.via = std::make_unique<ViaBlock>();
+        used += sizeof(ViaBlock);
+      }
+      const std::size_t o = off(gx, gy);
+      return {&t.via->stamp[o], &t.via->state[o]};
+    }
+    // Read without allocating (the enclosed-cell debug scan): an untouched tile reads as never stamped.
+    std::pair<std::uint32_t, std::uint8_t> cell_peek(int layer, int gx, int gy) const {
+      const std::size_t blk = static_cast<std::size_t>(gy >> NodeStore::kTileShift) * static_cast<std::size_t>(tiles_x) +
+                              static_cast<std::size_t>(gx >> NodeStore::kTileShift);
+      const Tile* t = tiles[blk].get();
+      if (!t || !t->layers[static_cast<std::size_t>(layer)]) return {0, 0};
+      const CellBlock& b = *t->layers[static_cast<std::size_t>(layer)];
+      const std::size_t o = off(gx, gy);
+      return {b.stamp[o], b.state[o]};
+    }
+    // The generation wrapped: every stamp is stale. Zero the stamps in place; the states and histories they
+    // guarded are unreachable behind a zero stamp, exactly as the dense fills leave them.
+    void clear_stamps() {
+      for (auto& t : tiles) {
+        if (!t) continue;
+        for (auto& b : t->layers)
+          if (b) std::fill(std::begin(b->stamp), std::end(b->stamp), 0u);
+        if (t->via) std::fill(std::begin(t->via->stamp), std::end(t->via->stamp), 0u);
+      }
+    }
+  };
+  CompanionStore comp;
   std::uint32_t gen = 0;
   // (net and width, layer-cell key) blocked by FIXED copper after exact-check failures (routed copper changes,
   // so conflicts with it are not learned permanently). Probed once per newly stamped cell in cell_cost, so it
@@ -1157,21 +1264,34 @@ struct Router::Impl {
 
   // Extra cost of entering a cell: -1 blocked, 0 free, > 0 crossing routed copper (soft mode only).
   std::int64_t cell_cost(const Window& w, int layer, int cx, int cy, NetId net, Coord hw) {
-    const std::size_t idx = (static_cast<std::size_t>(layer) * static_cast<std::size_t>(w.h) + static_cast<std::size_t>(cy)) * static_cast<std::size_t>(w.w) + static_cast<std::size_t>(cx);
     const int gx = w.x0 + cx, gy = w.y0 + cy;
-    if (cstamp[idx] != gen) {
-      cstamp[idx] = gen;
+    std::uint32_t* stamp_p;
+    std::uint8_t* state_p;
+    std::int64_t* hist_p;
+    if (comp.paged) {
+      const auto s = comp.cell(layer, gx, gy);
+      stamp_p = s.stamp;
+      state_p = s.state;
+      hist_p = s.hist;
+    } else {
+      const std::size_t idx = (static_cast<std::size_t>(layer) * static_cast<std::size_t>(w.h) + static_cast<std::size_t>(cy)) * static_cast<std::size_t>(w.w) + static_cast<std::size_t>(cx);
+      stamp_p = &cstamp[idx];
+      state_p = &cell_state[idx];
+      hist_p = &cell_hist[idx];
+    }
+    if (*stamp_p != gen) {
+      *stamp_p = gen;
       const std::int64_t key = cell_key(layer, gx, gy);
       ++obs->checks;
       ++wc().cell_checks;
-      cell_state[idx] = static_cast<std::uint8_t>(!learned_block.empty() && learned_block.count({block_owner(net), key}) ? 2 : point_state(layer, gx, gy, net, hw));
-      cell_hist[idx] = cell_state[idx] == 2 ? 0 : hist_cost(layer, gx, gy);  // history only changes between searches
+      *state_p = static_cast<std::uint8_t>(!learned_block.empty() && learned_block.count({block_owner(net), key}) ? 2 : point_state(layer, gx, gy, net, hw));
+      *hist_p = *state_p == 2 ? 0 : hist_cost(layer, gx, gy);  // history only changes between searches
     }
-    const int st = cell_state[idx];
+    const int st = *state_p;
     if (st == 2) return -1;
     const std::int64_t rc = reserved_cost(layer, gx, gy, net);
     if (rc < 0) return -1;
-    std::int64_t hc = cell_hist[idx] + rc;
+    std::int64_t hc = *hist_p + rc;
     if (bus_mode != 0 && !bus_guide[lat_index(layer, gx, gy)]) {  // bus lane: off the neighbour lane's guide (doc 05 §38)
       if (bus_mode == 2) return -1;
       hc += bus_pen;
@@ -1221,10 +1341,20 @@ struct Router::Impl {
   }
   std::int64_t via_cost_at(const Window& w, int cx, int cy, NetId net, Coord d, Coord drill) {
     if (!vias_ok(net)) return -1;
-    const std::size_t idx = static_cast<std::size_t>(cy) * static_cast<std::size_t>(w.w) + static_cast<std::size_t>(cx);
-    if (vstamp[idx] != gen) {
-      vstamp[idx] = gen;
-      const int gx = w.x0 + cx, gy = w.y0 + cy;
+    const int gx = w.x0 + cx, gy = w.y0 + cy;
+    std::uint32_t* vstamp_p;
+    std::uint8_t* vstate_p;
+    if (comp.paged) {
+      const auto s = comp.via(gx, gy);
+      vstamp_p = s.stamp;
+      vstate_p = s.state;
+    } else {
+      const std::size_t idx = static_cast<std::size_t>(cy) * static_cast<std::size_t>(w.w) + static_cast<std::size_t>(cx);
+      vstamp_p = &vstamp[idx];
+      vstate_p = &via_state[idx];
+    }
+    if (*vstamp_p != gen) {
+      *vstamp_p = gen;
       const Point p = at(gx, gy);
       const Coord margin = pitch * 71 / 100 + 1;
       int st;
@@ -1249,9 +1379,9 @@ struct Router::Impl {
           st = obs->routed_via_state(probe_disk, near, net, soft, drill / 2 + margin);
         }
       }
-      via_state[idx] = static_cast<std::uint8_t>(st);
+      *vstate_p = static_cast<std::uint8_t>(st);
     }
-    if (via_state[idx] == 2) return -1;
+    if (*vstate_p == 2) return -1;
     std::int64_t extra = 0;
     for (int l = 0; l < nl && !reserve.empty(); ++l) {
       const std::int64_t rc = reserved_cost(l, w.x0 + cx, w.y0 + cy, net);
@@ -1269,7 +1399,7 @@ struct Router::Impl {
       const std::int32_t r = pinvia[static_cast<std::size_t>(w.y0 + cy) * static_cast<std::size_t>(nx) + static_cast<std::size_t>(w.x0 + cx)];
       if (r != 0 && r != static_cast<std::int32_t>(net)) extra += pin_via_cost;
     }
-    return extra + (via_state[idx] == 1 ? soft_unit : 0);
+    return extra + (*vstate_p == 1 ? soft_unit : 0);
   }
   // --pin-via-pen (D156, M22 item 6): lattice point -> net of the dense-package pin whose fan-out region (pin_via_mm past its copper plus a
   // via's radius and clearance) holds it, -1 for two nets' regions, 0 none. Vias of other nets there pay pin_via_cost: on the failing boards
@@ -1934,19 +2064,25 @@ struct Router::Impl {
     const std::size_t D = opt.bend_states && !mem_fast_bends ? 9 : 1;  // direction states per lattice point
     const std::size_t states = cells * static_cast<std::size_t>(nl) * D;
     sn.prepare(opt.paged_nodes, states, opt.search_mem_mb > 0 ? static_cast<std::size_t>(opt.search_mem_mb) * 1024 * 1024 : 0, w.w, w.h, w.x0, w.y0, nx, ny, nl, D);
-    if (cstamp.size() < cells * static_cast<std::size_t>(nl)) {
-      cstamp.assign(cells * static_cast<std::size_t>(nl), 0);
-      cell_state.resize(cells * static_cast<std::size_t>(nl));
-      cell_hist.resize(cells * static_cast<std::size_t>(nl));
-    }
-    if (vstamp.size() < cells) {
-      vstamp.assign(cells, 0);
-      via_state.resize(cells);
+    comp.prepare(opt.paged_nodes, nx, ny, nl, opt.search_mem_mb > 0 ? static_cast<std::size_t>(opt.search_mem_mb) * 1024 * 1024 : 0);
+    if (!opt.paged_nodes) {
+      if (cstamp.size() < cells * static_cast<std::size_t>(nl)) {
+        cstamp.assign(cells * static_cast<std::size_t>(nl), 0);
+        cell_state.resize(cells * static_cast<std::size_t>(nl));
+        cell_hist.resize(cells * static_cast<std::size_t>(nl));
+      }
+      if (vstamp.size() < cells) {
+        vstamp.assign(cells, 0);
+        via_state.resize(cells);
+      }
     }
     if (++gen > kGenMask) {
       sn.clear_all();
-      std::fill(cstamp.begin(), cstamp.end(), 0u);
-      std::fill(vstamp.begin(), vstamp.end(), 0u);
+      if (opt.paged_nodes) comp.clear_stamps();
+      else {
+        std::fill(cstamp.begin(), cstamp.end(), 0u);
+        std::fill(vstamp.begin(), vstamp.end(), 0u);
+      }
       std::fill(rstamp.begin(), rstamp.end(), 0u);
       std::fill(bstamp.begin(), bstamp.end(), 0u);
       gen = 1;
@@ -2419,11 +2555,21 @@ struct Router::Impl {
         // Classify the rejected neighbours of every expanded cell (diagnostics).
         long fixed = 0, learned = 0, other = 0, startcells = static_cast<long>(src.cells.size());
         for (std::size_t lc = 0; lc < cells * static_cast<std::size_t>(nl); ++lc) {
-          if (cstamp[lc] != gen) continue;
-          if (cell_state[lc] != 2) continue;
           const int l = static_cast<int>(lc / cells);
           const std::int64_t ci = static_cast<std::int64_t>(lc % cells);
           const int gx = w.x0 + static_cast<int>(ci % w.w), gy = w.y0 + static_cast<int>(ci / w.w);
+          std::uint32_t stamp_lc;
+          std::uint8_t state_lc;
+          if (comp.paged) {
+            const auto pk = comp.cell_peek(l, gx, gy);
+            stamp_lc = pk.first;
+            state_lc = pk.second;
+          } else {
+            stamp_lc = cstamp[lc];
+            state_lc = cell_state[lc];
+          }
+          if (stamp_lc != gen) continue;
+          if (state_lc != 2) continue;
           if (learned_block.count({block_owner(net), cell_key(l, gx, gy)})) ++learned;
           else if (obs->disk_state(at(gx, gy), l, hw, net, 0, true) == 2) {
             ++fixed;
