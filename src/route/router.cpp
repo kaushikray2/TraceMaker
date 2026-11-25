@@ -389,12 +389,7 @@ struct Router::Impl {
   // (net and width, layer-cell key) blocked by FIXED copper after exact-check failures (routed copper changes,
   // so conflicts with it are not learned permanently). Probed once per newly stamped cell in cell_cost, so it
   // is a flat hash set, not an ordered tree; membership semantics are unchanged.
-  struct PairHash {
-    std::size_t operator()(const std::pair<std::int64_t, std::int64_t>& p) const noexcept {
-      return static_cast<std::size_t>(splitmix64(static_cast<std::uint64_t>(p.first) ^ splitmix64(static_cast<std::uint64_t>(p.second))));
-    }
-  };
-  std::unordered_set<std::pair<std::int64_t, std::int64_t>, PairHash> learned_block;
+  core::FlatPairSet learned_block;  // Stage 2B: flat set replaces std::unordered_set (same reasoning as history)
   std::int64_t block_owner(NetId net) const { return static_cast<std::int64_t>(net) * 10'000'000 + track_width(net) / 1000; }
 
   // ---- negotiation state ----
@@ -1287,7 +1282,7 @@ struct Router::Impl {
       const std::int64_t key = cell_key(layer, gx, gy);
       ++obs->checks;
       ++wc().cell_checks;
-      *state_p = static_cast<std::uint8_t>(!learned_block.empty() && learned_block.count({block_owner(net), key}) ? 2 : point_state(layer, gx, gy, net, hw));
+      *state_p = static_cast<std::uint8_t>(!learned_block.empty() && learned_block.contains(block_owner(net), key) ? 2 : point_state(layer, gx, gy, net, hw));
       *hist_p = *state_p == 2 ? 0 : hist_cost(layer, gx, gy);  // history only changes between searches
     }
     const int st = *state_p;
@@ -2657,7 +2652,7 @@ struct Router::Impl {
           }
           if (stamp_lc != gen) continue;
           if (state_lc != 2) continue;
-          if (learned_block.count({block_owner(net), cell_key(l, gx, gy)})) ++learned;
+          if (learned_block.contains(block_owner(net), cell_key(l, gx, gy))) ++learned;
           else if (obs->disk_state(at(gx, gy), l, hw, net, 0, true) == 2) {
             ++fixed;
             if (std::getenv("TM_DEBUG_ENCLOSED")[0] == '2' && fixed % 8 == 0)
@@ -2949,7 +2944,7 @@ struct Router::Impl {
       // can be blocked.
       if ((qb.intersects(ia) && on_pad_copper(q, c.pad_a, s.layer)) || (c.pad_b >= 0 && qb.intersects(ib) && on_pad_copper(q, c.pad_b, s.layer))) continue;
       if (obs->disk_state(q, s.layer, width / 2, c.net, 0, /*ignore_routed=*/true) == 2) {
-        learned_block.insert({block_owner(c.net), cell_key(s.layer, to_ix(q.x), to_iy(q.y))});
+        learned_block.insert(block_owner(c.net), cell_key(s.layer, to_ix(q.x), to_iy(q.y)));
         ++learned;
       }
     }
@@ -2960,7 +2955,7 @@ struct Router::Impl {
         const Point q{s.a.x + (s.b.x - s.a.x) * k / n, s.a.y + (s.b.y - s.a.y) * k / n};
         if (on_pad_copper(q, c.pad_a, s.layer) || (c.pad_b >= 0 && on_pad_copper(q, c.pad_b, s.layer))) continue;
         if ((k == 0 || k == n) && n > 1) continue;  // interior points suffice for longer steps
-        learned_block.insert({block_owner(c.net), cell_key(s.layer, to_ix(q.x), to_iy(q.y))});
+        learned_block.insert(block_owner(c.net), cell_key(s.layer, to_ix(q.x), to_iy(q.y)));
       }
     }
   }

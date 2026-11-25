@@ -11,7 +11,15 @@
 #include <unordered_map>
 
 #include "core/flat_map.hpp"
+#include <unordered_set>
+#include <utility>
 
+struct PairHashRef {
+  std::size_t operator()(const std::pair<std::int64_t, std::int64_t>& p) const noexcept {
+    return std::hash<std::int64_t>{}(p.first * 1000003) ^ std::hash<std::int64_t>{}(p.second);
+  }
+};
+using tmk::core::FlatPairSet;
 using tmk::core::FlatU64U16;
 
 namespace {
@@ -76,4 +84,25 @@ TEST_CASE("flat map: randomized differential traffic", "[flat_map]") {
   REQUIRE(m.empty());
   REQUIRE(m.size() == 0);
   REQUIRE(m.find(0) == nullptr);
+}
+
+TEST_CASE("flat pair set: randomized differential membership", "[flat_map]") {
+  FlatPairSet s;
+  std::unordered_set<std::pair<std::int64_t, std::int64_t>, PairHashRef> ref;
+  std::mt19937_64 rng(20261125);
+  REQUIRE(s.empty());
+  REQUIRE(!s.contains(0, 0));
+  for (int step = 0; step < 200000; ++step) {
+    const std::int64_t a = static_cast<std::int64_t>(rng() % 64) * 10'000'000 + static_cast<std::int64_t>(rng() % 300);
+    const std::int64_t b = static_cast<std::int64_t>((rng() % 8) << 48 | (rng() % 4000) << 24 | (rng() % 4000));
+    s.insert(a, b);
+    ref.insert({a, b});
+    REQUIRE(s.contains(a, b));
+    REQUIRE(s.size() == ref.size());
+    if (step % 991 == 0) {
+      const std::int64_t x = static_cast<std::int64_t>(rng() % 64) * 10'000'000 + 9999;
+      REQUIRE(s.contains(x, b) == (ref.count({x, b}) != 0));
+    }
+  }
+  for (const auto& pr : ref) REQUIRE(s.contains(pr.first, pr.second));
 }
