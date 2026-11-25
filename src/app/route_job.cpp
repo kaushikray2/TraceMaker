@@ -45,6 +45,7 @@
 #include "drc/refill.hpp"
 #include "drc/rule_engine.hpp"
 #include "geom/clip.hpp"
+#include "geom/shape.hpp"
 #include "route/diff_pair.hpp"
 #include "route/layer_limits.hpp"
 #include "gpu/device.hpp"
@@ -434,7 +435,8 @@ RouteJobResult run_route_job(RouteJob job) {
     Coord wx1 = 0, wy1 = 0, wx2 = 0, wy2 = 0;
     if (!job.reroute_window.empty()) {
       double w[4] = {0, 0, 0, 0};
-      bool ok = true;
+      bool ok = !job.reroute_window.starts_with(",") && !job.reroute_window.ends_with(",") &&
+                job.reroute_window.find(",,") == std::string::npos;  // a trailing or doubled comma is malformed, not a fifth field
       std::stringstream ss(job.reroute_window);
       std::string tok;
       int i = 0;
@@ -443,7 +445,7 @@ RouteJobResult run_route_job(RouteJob job) {
         try {
           std::size_t used = 0;
           w[i] = std::stod(tok, &used);
-          if (used != tok.size()) ok = false;
+          if (used != tok.size() || !std::isfinite(w[i])) ok = false;  // stod accepts nan and inf; both are malformed here
         } catch (...) { ok = false; }
         ++i;
       }
@@ -468,15 +470,13 @@ RouteJobResult run_route_job(RouteJob job) {
     auto in_window = [&](model::Point q) { return !reroute_has_window || (q.x >= wx1 && q.x <= wx2 && q.y >= wy1 && q.y <= wy2); };
     auto seg_hits = [&](model::Point a, model::Point b) {
       if (!reroute_has_window || in_window(a) || in_window(b)) return true;
-      auto cross = [](model::Point o, model::Point p, model::Point q) -> long long {
-        return static_cast<long long>(p.x - o.x) * (q.y - o.y) - static_cast<long long>(p.y - o.y) * (q.x - o.x);
-      };
-      auto seg_seg = [&](model::Point p1, model::Point p2, model::Point p3, model::Point p4) {
-        const long long d1 = cross(p3, p4, p1), d2 = cross(p3, p4, p2), d3 = cross(p1, p2, p3), d4 = cross(p1, p2, p4);
-        return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
-      };
+      // geom::segments_intersect is exact (128-bit orientation) and closed: a segment through a
+      // window corner, ending on an edge, or running along a boundary all count as hits. The
+      // strict-inequality test this replaces missed every one of those, and its 64-bit cross
+      // products could overflow on board-scale coordinates.
       const model::Point c1{wx1, wy1}, c2{wx2, wy1}, c3{wx2, wy2}, c4{wx1, wy2};
-      return seg_seg(a, b, c1, c2) || seg_seg(a, b, c2, c3) || seg_seg(a, b, c3, c4) || seg_seg(a, b, c4, c1);
+      return geom::segments_intersect(a, b, c1, c2) || geom::segments_intersect(a, b, c2, c3) ||
+             geom::segments_intersect(a, b, c3, c4) || geom::segments_intersect(a, b, c4, c1);
     };
     auto rip = [&](auto& items, auto&& hits, int& count) {
       for (std::size_t i = items.size(); i-- > 0;) {
