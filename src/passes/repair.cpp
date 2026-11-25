@@ -475,6 +475,7 @@ RepairResult repair_open(const model::Board& base, const model::DesignRules& rul
         if (ro.variants > 1) {
           auto pr = route::route_portfolio(step, rules, o, ro.variants, {}, ro.threads);
           for (const auto& w : pr.work) st.work += w.total().expansions;
+          if (pr.stopped_early) out.stopped_early = true;
           r = std::move(pr.best);
         } else {
           r = route::Router(step, rules, o).run();

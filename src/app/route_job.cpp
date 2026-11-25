@@ -1298,8 +1298,10 @@ RouteJobResult run_route_job(RouteJob job) {
   nlohmann::json removed_items;                      // the input's tracks and vias the repair lifted, in the --emit-items layout
   route::RouteResult gone_input;                     // the same copper as items
   int islands_cut = 0;                               // groups of copper that joined no pad after the run, taken off (D198)
-  if (job.repair != "off" && (job.repair == "on" || input_copper) && res.routed < res.connections && job.time_total_s > 0 && total_left() < kMinStage)
+  if (job.repair != "off" && (job.repair == "on" || input_copper) && res.routed < res.connections && job.time_total_s > 0 && total_left() < kMinStage) {
+    stage_time_limited = true;  // skipped on the wall clock, like every other stage's --time-total skip
     log(fmt("repair: skipped, --time-total (%.0f s) is used up", job.time_total_s));
+  }
   else if (job.repair != "off" && (job.repair == "on" || input_copper) && res.routed < res.connections) {
     live::field("stage", "repair windows");
     if (opt.sink) opt.sink->publish(server::stage("repair", "begin", fmt("%d connections open", res.connections - res.routed)));
@@ -1321,6 +1323,7 @@ RouteJobResult run_route_job(RouteJob job) {
     ro.threads = job.threads;
     const auto rep = passes::repair_open(*route_board, rules, res, opt, ro, log);
     if (rep.time_stopped) stage_time_limited = true;
+    if (rep.stopped_early) stopped_early = true;  // an attempt's portfolio fired the sibling early-stop: not deterministic
     all_work.phase[static_cast<std::size_t>(route::WorkPhase::Cleanup)].expansions += rep.work;
     repair_summary = rep.summary();
     if (rep.changed) {
