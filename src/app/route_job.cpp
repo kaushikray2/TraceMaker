@@ -278,6 +278,15 @@ RouteJobResult run_route_job(RouteJob job) {
   };
   auto& opt = job.opt;
   opt.early_stop = job.no_early_stop ? -1 : job.early_stop ? 1 : 0;  // issue #20: resolved once for every run of this job
+  // --deterministic (issue #17): the contract as one switch, resolved here so route jobs get it too, not only
+  // the CLI. The seed is in effect whether or not --seed was typed (RouterOptions::seed defaults to the fixed 1
+  // the summary reports); what the mode adds is the given-ness, which is what isolates the run from the
+  // knowledge base below. A sibling early-stop makes the winner depend on thread timing, so it is off in this
+  // mode whatever the job asked for.
+  if (job.deterministic_mode) {
+    job.seed_given = true;
+    opt.early_stop = -1;
+  }
   // --time-total (D186): one deadline for the job. `cap` gives a stage at most what is left of it.
   const auto job_t0 = std::chrono::steady_clock::now();
   auto total_left = [&] { return job.time_total_s - std::chrono::duration<double>(std::chrono::steady_clock::now() - job_t0).count(); };
@@ -304,6 +313,14 @@ RouteJobResult run_route_job(RouteJob job) {
   // every variant that work budget).
   const bool work_bounded = opt.relax ? (opt.round_work > 0 || opt.rounds > 0)
                                        : (opt.work_budget > 0 || opt.round_work > 0);
+  // --deterministic refuses the configurations that cannot honour it (issue #17): no work budget means the
+  // wall clock bounds the run, and halving sizes its rungs by the thread count. An explicit --time beside a
+  // work budget stays allowed as a safety net; if it ever binds, the summary's assertion below reports the
+  // violation instead of promising repeatability.
+  if (job.deterministic_mode && !(opt.work_budget > 0 || opt.round_work > 0))
+    throw std::invalid_argument("--deterministic needs a work budget (--work, or --round-work): a run bounded by the wall clock cannot promise a repeatable result");
+  if (job.deterministic_mode && opt.halving)
+    throw std::invalid_argument("--deterministic cannot combine with --halving: its rungs are sized by the thread count, so its result depends on --threads");
   const bool time_disarmed = work_bounded && !job.time_given && job.time_total_s <= 0;
   if (time_disarmed) opt.time_limit_s = kNoTimeLimit;
   // The live page (core/live.hpp): what this job is and where it is.
@@ -2222,6 +2239,22 @@ RouteJobResult run_route_job(RouteJob job) {
   // practice; it is just not promised.
   out.summary["deterministic"] = !kb_used && (opt.work_budget > 0 || opt.round_work > 0) && !opt.halving &&
                                   !out.summary["time_limited"].get<bool>() && !stopped_early;
+  if (job.deterministic_mode) {
+    // The mode's assertion (issue #17): the flag promised repeatability, so a run that left the contract says
+    // so, with the reason, instead of a bare false a consumer has to diagnose. (Halving and a missing work
+    // budget are refused above; an early-stop cannot fire, the mode turns it off -- the knowledge base via an
+    // explicit --kb and a binding --time safety net are the reachable violations.)
+    out.summary["deterministic_mode"] = true;
+    if (!out.summary["deterministic"].get<bool>()) {
+      const std::string why =
+          kb_used ? "the knowledge base was used (--kb): what it has learned can differ between runs"
+                  : out.summary["time_limited"].get<bool>()
+                        ? "the time limit bound a stage (the --time safety net fired): the result depends on machine speed"
+                        : "the run left the deterministic contract";
+      out.summary["deterministic_violation"] = why;
+      log("warning: --deterministic: this run is not deterministic: " + why);
+    }
+  }
   if (out.summary["time_limited"].get<bool>())
     log(fmt("warning: the time limit (%.0f s) ended a stage before its work budget did: the result depends on machine speed", opt.time_limit_s));
   if (res.cache_evictions > 0)

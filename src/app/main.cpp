@@ -1395,6 +1395,11 @@ static int run_main(int argc, char** argv) {
                   "reports deterministic: false when it fires)");
   route->add_flag("--no-early-stop", r_job.no_early_stop,
                   "Never cancel sibling variants once one fully routes (measurement runs that need the full variant distribution)");
+  route->add_flag("--deterministic", r_job.deterministic_mode,
+                  "Promise a repeatable run in one switch: a seed is in effect (the fixed default 1 unless --seed is given), the "
+                  "knowledge base is off unless --kb is given, sibling early-stop is off, and a work budget is required (--work, or "
+                  "--round-work); --time may still be given as a safety net, but if it ever binds, the run reports deterministic: "
+                  "false with the reason (deterministic_violation). --threads changes only the wall clock, never the result");
   int r_variants = 0;
   route->add_option("--variants", r_variants,
                     "Portfolio size (1 = single router; default: all with --work, else --threads); the output never depends on --threads "
