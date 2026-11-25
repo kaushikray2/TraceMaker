@@ -512,8 +512,9 @@ struct Router::Impl {
   double budget_scale = 1.0;  // < 1 while a share of the budget is reserved for the polish phase (opt.polish_fraction)
   // Set when wall time, not work, ended the search: the result then depends on machine speed (reported, never read here).
   mutable bool time_stopped = false;
+  mutable bool deadline_stopped = false;  // the shared portfolio deadline (a sibling completed) ended the search
   bool out_of_budget() const {
-    if (opt.deadline && res.routed < res.connections && elapsed() > opt.deadline->load(std::memory_order_relaxed)) return time_stopped = true;
+    if (opt.deadline && res.routed < res.connections && elapsed() > opt.deadline->load(std::memory_order_relaxed)) return time_stopped = deadline_stopped = true;
     if (opt.work_budget > 0 && static_cast<double>(res.expansions) >= static_cast<double>(opt.work_budget) * budget_scale) return true;
     if (elapsed() > opt.time_limit_s * budget_scale) return time_stopped = true;
     return false;
@@ -7059,6 +7060,7 @@ struct Router::Impl {
       }
       res.seconds = elapsed();
       res.time_limited = time_stopped;
+    res.deadline_stopped = deadline_stopped;
       res.cache_evictions = cache_evictions;
       res.obstacle_caches = static_cast<int>(caches.size());
       return res;
@@ -7911,6 +7913,7 @@ struct Router::Impl {
     emit_stats("done");
     emit("{\"type\":\"stage\",\"name\":\"route\",\"state\":\"end\",\"detail\":\"\"}");
     res.time_limited = time_stopped;
+    res.deadline_stopped = deadline_stopped;
     res.cache_evictions = cache_evictions;
     res.obstacle_caches = static_cast<int>(caches.size());
     return std::move(res);
@@ -8258,8 +8261,14 @@ PortfolioResult route_portfolio(const model::Board& board, const model::DesignRu
   // Once a variant is complete the others get a short grace period, so the best-quality complete result can be
   // chosen. With a work budget the run must stay deterministic, so this is only used under wall-clock limits.
   std::atomic<double> deadline{1e30};
+  // Sibling early-stop (issue #20): the first complete variant sets the shared deadline and the
+  // siblings drain against it. Auto (the default) enables it for wall-clock runs only: under a
+  // work budget (either kind) the winner would depend on thread timing, which the determinism
+  // contract forbids. --early-stop forces it (the run then reports not deterministic when it
+  // fires); --no-early-stop disables it everywhere.
+  const bool use_deadline = base.early_stop > 0 || (base.early_stop == 0 && base.work_budget == 0 && base.round_work == 0);
   for (auto& v : vs)
-    if (base.work_budget == 0) v.o.deadline = &deadline;
+    if (use_deadline) v.o.deadline = &deadline;
   // Event buffers per variant (recording mode): the winner's events are replayed into base.sink afterwards.
   struct BufferSink final : events::Sink {
     std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
@@ -8279,7 +8288,7 @@ PortfolioResult route_portfolio(const model::Board& board, const model::DesignRu
     }
   // Variants are taken in index order by `threads` workers. Which thread runs a variant, and when, cannot change its
   // result: each Router owns all of its state, its clock starts when it starts, and in work-budget mode nothing is
-  // shared between variants (the shared deadline is wall-clock mode only).
+  // shared between variants (the shared deadline is wall-clock mode only, unless --early-stop forces it: then the winner may depend on timing and the run says so).
   const std::size_t workers = threads <= 0 ? vs.size() : std::min(vs.size(), static_cast<std::size_t>(threads));
   parallel::PrimaryScope primary_workers(static_cast<int>(workers));  // Stage 2B #19: registered while any portfolio pool runs, so secondary stages (zone refill inside a search) stay under the cap
   // Total order on (routed desc, vias asc, length asc, variant index asc): the winner depends neither on the order
@@ -8366,6 +8375,10 @@ PortfolioResult route_portfolio(const model::Board& board, const model::DesignRu
   }
   const auto t_start = std::chrono::steady_clock::now();
   bool rounds_timed_out = false;  // the time limit ended the rounds (reported as RouteResult::time_limited)
+  bool es_stopped = false;        // sibling early-stop fired in the latest round (issue #20)
+  int es_cancelled = 0;
+  double es_saved_s = 0;
+  long es_saved_work = 0;
   for (int round = 0; round < rounds; ++round) {
     if (round > 0 && base.round_work > 0 &&
         std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count() > base.time_limit_s) {
@@ -8402,6 +8415,27 @@ PortfolioResult route_portfolio(const model::Board& board, const model::DesignRu
       });
     for (auto& t : pool) t.join();
     add_work();
+    {  // Sibling early-stop (issue #20): a variant completed this round and the deadline cut
+       // siblings short. Captured per round so the legalising round (no deadline) cannot erase it.
+      bool any_complete = false;
+      int canc = 0;
+      double ss = 0;
+      long sw = 0;
+      for (std::size_t i = 0; i < rs.size(); ++i) {
+        if (rs[i].connections > 0 && rs[i].routed == rs[i].connections) any_complete = true;
+        if (rs[i].deadline_stopped) {
+          ++canc;
+          ss += std::max(0.0, vs[i].o.time_limit_s - rs[i].seconds);
+          sw += std::max(0L, vs[i].o.work_budget - static_cast<long>(rs[i].expansions));
+        }
+      }
+      if (any_complete && canc > 0) {
+        es_stopped = true;
+        es_cancelled = canc;
+        es_saved_s = ss;
+        es_saved_work = sw;
+      }
+    }
     fresh_start = false;
     {
       std::size_t bi = 0;
@@ -8486,7 +8520,7 @@ PortfolioResult route_portfolio(const model::Board& board, const model::DesignRu
   if (!ramp_rules.empty() && last_relaxed) {
     // Out of time or rounds while relaxed: one round with next to no budget under the board's rules keeps what is legal.
     // Its zero time limit stops it at once by design, so only the rounds before it can say the clock ended the search.
-    for (const auto& r : rs) rounds_timed_out = rounds_timed_out || r.time_limited;
+    for (const auto& r : rs) rounds_timed_out = rounds_timed_out || (r.time_limited && !r.deadline_stopped);
     for (auto& v : vs) {
       v.o.warm = &warm_routes;
       v.o.sink = nullptr;
@@ -8507,6 +8541,7 @@ PortfolioResult route_portfolio(const model::Board& board, const model::DesignRu
     for (const auto& c : warm_routes) relaxed_routed.insert({c.pad_a, c.pad_b});
     for (auto& r : rs) {
       r.time_limited = false;
+      r.deadline_stopped = false;
       for (std::size_t k = 0; k < r.unrouted.size(); ++k) {
         auto& u = r.unrouted[k];
         if (!u.why.empty()) continue;
@@ -8538,13 +8573,17 @@ PortfolioResult route_portfolio(const model::Board& board, const model::DesignRu
     for (auto& m : bufs[best]->msgs) base.sink->publish(std::move(m));
   // Any variant stopped by time, not work, could have beaten the winner on a faster machine: the result depends on machine speed.
   bool timed = rounds_timed_out;
-  for (const auto& r : rs) timed = timed || r.time_limited;
+  for (const auto& r : rs) timed = timed || (r.time_limited && !r.deadline_stopped);  // a sibling cancelled by the early-stop deadline did not end this result by time
   pr.best = std::move(rs[best]);
   if (best_final_routed > pr.best.routed) pr.best = std::move(best_final);  // breathing ended relaxed or worse: the best legal one
   if (warm_floor_routed > pr.best.routed) pr.best = std::move(warm_floor);  // the ramp lost routes of the warm start: return the warm start
   pr.best.time_limited = timed;
   pr.best.work = work_sum[best];  // the kept result's variant over every round (one round: its own work, as before)
   pr.best.expansions = expansions_sum[best];
+  pr.stopped_early = es_stopped;
+  pr.cancelled = es_cancelled;
+  pr.saved_s = base.work_budget > 0 || base.round_work > 0 ? 0 : es_saved_s;  // report the saving in the currency the run was bounded by
+  pr.saved_work = base.work_budget > 0 || base.round_work > 0 ? es_saved_work : 0;
   return pr;
 }
 

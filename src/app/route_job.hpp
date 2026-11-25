@@ -26,6 +26,8 @@ struct RouteJob {
   std::string kb_path;            // knowledge base file; empty = none
   bool seed_given = false;        // --seed was passed explicitly: the run is under the deterministic contract
   bool kb_given = false;          // --kb was passed explicitly: the knowledge base may be used even under --seed
+  bool early_stop = false;        // --early-stop: cancel sibling variants once one fully routes, also under --work (issue #20)
+  bool no_early_stop = false;     // --no-early-stop: never cancel siblings (measurement runs)
   std::string items_out;          // --emit-items file; empty = none
   std::string json_out;           // --json summary file; empty = none
   // --report FILE (doc 18 D3, D136): a run report for designers, HTML (or Markdown for .md), rendered from the summary alone. It adds

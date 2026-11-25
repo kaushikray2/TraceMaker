@@ -267,11 +267,16 @@ RouteJobResult run_route_job(RouteJob job) {
   // escape and the relax rounds' legalise step are route_portfolio's work, so their time sits in `search`.
   double parse_s = 0, search_s = 0, repair_s = 0, refill_s = 0, save_s = 0;
   parallel::set_cap(std::max(1, job.threads));  // Stage 2B #19: this job threads value is the process-wide worker cap
+  bool stopped_early = false;  // issue #20: aggregated over the main run and every challenger below
+  int es_cancelled = 0;
+  double es_saved_s = 0;
+  long es_saved_work = 0;
   auto log = [&](const std::string& line) {
     live::log(line);
     if (job.log) job.log(line);
   };
   auto& opt = job.opt;
+  opt.early_stop = job.no_early_stop ? -1 : job.early_stop ? 1 : 0;  // issue #20: resolved once for every run of this job
   // --time-total (D186): one deadline for the job. `cap` gives a stage at most what is left of it.
   const auto job_t0 = std::chrono::steady_clock::now();
   auto total_left = [&] { return job.time_total_s - std::chrono::duration<double>(std::chrono::steady_clock::now() - job_t0).count(); };
@@ -959,6 +964,10 @@ RouteJobResult run_route_job(RouteJob job) {
     std::string best_name;
     nlohmann::json rows = nlohmann::json::array();
     route::WorkProfile work;
+    bool stopped_early = false;  // a sibling completed and the rest were cancelled (issue #20)
+    int cancelled = 0;
+    double saved_s = 0;
+    long saved_work = 0;
     std::vector<std::pair<Coord, int>> ramp_stages;  // relaxed stages of the run: clearance lowered by, best count routed
     int unadvised_best = -1, advised_best = -1;  // routed counts of the best variant of each kind (-1: none ran)
   };
@@ -1000,6 +1009,10 @@ RouteJobResult run_route_job(RouteJob job) {
       r.best_index = pr.indices[static_cast<std::size_t>(pr.best_variant)];
       r.best_name = pr.variants[static_cast<std::size_t>(pr.best_variant)];
       r.res = std::move(pr.best);
+      r.stopped_early = pr.stopped_early;
+      r.cancelled = pr.cancelled;
+      r.saved_s = pr.saved_s;
+      r.saved_work = pr.saved_work;
       r.ramp_stages = pr.ramp_stages;
       for (const auto& w : pr.work)
         for (int p = 0; p < route::kWorkPhases; ++p) r.work.phase[static_cast<std::size_t>(p)] += w.phase[static_cast<std::size_t>(p)];
@@ -1013,6 +1026,10 @@ RouteJobResult run_route_job(RouteJob job) {
   };
   {
     Run first = run_once(opt, 0, true);
+    stopped_early = first.stopped_early;
+    es_cancelled = first.cancelled;
+    es_saved_s = first.saved_s;
+    es_saved_work = first.saved_work;
     res = std::move(first.res);
     ran = std::move(first.ran);
     best_index = first.best_index;
@@ -1079,6 +1096,12 @@ RouteJobResult run_route_job(RouteJob job) {
       live_stage = fmt("rescue (%s): ", mode);
       Run next = run_once(o2, 0, false);
       if (next.res.time_limited) stage_time_limited = true;  // adopted or not: a time-stopped challenger shapes the outcome
+      if (next.stopped_early) {
+        stopped_early = true;
+        es_cancelled += next.cancelled;
+        es_saved_s += next.saved_s;
+        es_saved_work += next.saved_work;
+      }
       const double pass_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - route_t0).count();  // a relax result's own clock is its last round's
       rescue_s += pass_s;
       for (int p = 0; p < route::kWorkPhases; ++p) all_work.phase[static_cast<std::size_t>(p)] += next.work.phase[static_cast<std::size_t>(p)];
@@ -1200,6 +1223,12 @@ RouteJobResult run_route_job(RouteJob job) {
       live_stage = fmt("advisor round %d: ", round);
       Run next = run_once(o2, round, false);
       if (next.res.time_limited) stage_time_limited = true;  // adopted or not: a time-stopped challenger shapes the outcome
+      if (next.stopped_early) {
+        stopped_early = true;
+        es_cancelled += next.cancelled;
+        es_saved_s += next.saved_s;
+        es_saved_work += next.saved_work;
+      }
       for (int p = 0; p < route::kWorkPhases; ++p) all_work.phase[static_cast<std::size_t>(p)] += next.work.phase[static_cast<std::size_t>(p)];
       const bool adopt = route::route_result_better(next.res, res);
       rj["routed_after"] = next.res.routed;
@@ -2061,6 +2090,12 @@ RouteJobResult run_route_job(RouteJob job) {
                              {"refill", refill_s}, {"save", save_s},   {"other", other_s}};
     out.summary["peak_rss_mb"] = peak_rss_mb();
     out.summary["threads_effective"] = threads;  // Stage 2B #19: the worker cap in force for this job
+    out.summary["stopped_early"] = stopped_early;  // issue #20: a sibling completed and cancelled the rest
+    if (stopped_early) {
+      out.summary["early_stop_cancelled"] = es_cancelled;
+      out.summary["early_stop_saved_s"] = es_saved_s;
+      out.summary["early_stop_saved_work"] = es_saved_work;
+    }
   }
   // M22 repair steps (D156), only when they ran: a run without them writes the summary it always did.
   for (const auto& [k, v] : {std::pair<const char*, long>{"via_shoves", res.via_shoves}, {"via_shove_trials", res.via_shove_trials}, {"window_escalations", res.window_escalations},
@@ -2150,12 +2185,13 @@ RouteJobResult run_route_job(RouteJob job) {
   out.summary["kb_used"] = kb_used;
   // The deterministic contract (the plugin's Tier 1 ask): no knowledge-base influence, a work budget as the
   // binding limit (--work, or --round-work: route_portfolio runs every round on it), no halving (its rungs are
-  // sized by the thread count), and no stage stopped by the wall clock.
+  // sized by the thread count), no stage stopped by the wall clock, and no sibling early-stop
+  // (its winner depends on thread timing).
   // The seed needs no --seed flag to qualify: RouterOptions::seed defaults to a fixed 1, so a --work --no-kb run
   // (the record_replay shape) is as repeatable as a seeded one. A run outside the contract may still repeat in
   // practice; it is just not promised.
   out.summary["deterministic"] = !kb_used && (opt.work_budget > 0 || opt.round_work > 0) && !opt.halving &&
-                                  !out.summary["time_limited"].get<bool>();
+                                  !out.summary["time_limited"].get<bool>() && !stopped_early;
   if (out.summary["time_limited"].get<bool>())
     log(fmt("warning: the time limit (%.0f s) ended a stage before its work budget did: the result depends on machine speed", opt.time_limit_s));
   if (res.cache_evictions > 0)

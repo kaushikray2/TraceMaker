@@ -80,15 +80,32 @@ OS thread peaks measured at 50 ms sampling on the seeded usb-hub run:
 boards byte-identical between the two --threads 2 runs and the routed
 count (112/113) unchanged at 2 and 8 threads.
 
+### Stage 2B step 5 — sibling early-stop (2026-11-24, #20)
+The portfolio's shared deadline (a completer sets it; siblings drain
+against 2x its elapsed + 5 s) already existed for wall-clock runs; it
+is now reported and controllable. `stopped_early`,
+`early_stop_cancelled` and the cancelled variants' unspent budget
+(`early_stop_saved_s` for wall-clock runs, `early_stop_saved_work`
+for work-budget runs) are in the route JSON. Auto mode keeps the
+deadline off under either work budget — the winner there must not
+depend on thread timing; `--early-stop` forces it (a fired run
+reports deterministic: false, via the new deadline_stopped result
+flag, which also keeps such runs from being misreported as
+time-limited), `--no-early-stop` disables it everywhere. Halving
+keeps its own rung-level early exit. Verified: build clean; ctest
+495/495 (seed gate unchanged); usb-hub minus its one hard net,
+--time 180: wall 33.7 -> 19.7 s, 1 variant cancelled, board
+byte-identical to the --no-early-stop run (same winner); forced
+--work --early-stop: fired, saved_work 16.8M of 20M, deterministic
+false, time_limited false.
+
 ## In progress
 
-Nothing in flight at this commit; the next item is #20 (see Remaining).
+Nothing in flight at this commit; the next items are the data-structure changes (see Remaining).
 
 ## Remaining (in sequence)
 
 ### Stage 2B — CPU performance (rest)
-- #20 Portfolio sibling early-stop when a variant fully routes
-  (~1-1.5 d; --no-early-stop keeps measurement runs pure).
 - Radix heap for the open list; flat open-addressing hash maps; spatial
   keepouts / UniformGrid.
 - field_cpu: change-tracking init, parallel layer sweeps, shared

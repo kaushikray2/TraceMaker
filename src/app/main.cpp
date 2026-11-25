@@ -1390,6 +1390,11 @@ static int run_main(int argc, char** argv) {
                     "size, except with --work, where all variants run and the output is identical for any thread count. A hard global cap "
                     "for the whole job: no stage (portfolio, zone refill, repair) runs more concurrent workers than this, and the process "
                     "thread peak stays within the cap + 2 (the main thread and the live-log writer)");
+  route->add_flag("--early-stop", r_job.early_stop,
+                  "Cancel sibling variants once one fully routes, also under --work (the winner then depends on timing: the run "
+                  "reports deterministic: false when it fires)");
+  route->add_flag("--no-early-stop", r_job.no_early_stop,
+                  "Never cancel sibling variants once one fully routes (measurement runs that need the full variant distribution)");
   int r_variants = 0;
   route->add_option("--variants", r_variants,
                     "Portfolio size (1 = single router; default: all with --work, else --threads); the output never depends on --threads "
