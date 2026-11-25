@@ -328,8 +328,8 @@ RouteJobResult run_route_job(RouteJob job) {
   // wall clock bounds the run, and halving sizes its rungs by the thread count. An explicit --time beside a
   // work budget stays allowed as a safety net; if it ever binds, the summary's assertion below reports the
   // violation instead of promising repeatability.
-  if (job.deterministic_mode && !(opt.work_budget > 0 || opt.round_work > 0))
-    throw std::invalid_argument("--deterministic needs a work budget (--work, or --round-work): a run bounded by the wall clock cannot promise a repeatable result");
+  if (job.deterministic_mode && !work_bounded)
+    throw std::invalid_argument("--deterministic needs a work budget (--work, --round-work, or --rounds with --relax): a run bounded by the wall clock cannot promise a repeatable result");
   if (job.deterministic_mode && opt.halving)
     throw std::invalid_argument("--deterministic cannot combine with --halving: its rungs are sized by the thread count, so its result depends on --threads");
   const bool time_disarmed = work_bounded && !job.time_given && job.time_total_s <= 0;
@@ -1131,7 +1131,7 @@ RouteJobResult run_route_job(RouteJob job) {
   const int threads = std::max(1, job.threads);
   // An explicit --variants may go beyond the eight designed variants: the extras are seeded diversifications
   // (doc 16: on hard dense breakouts the winning variant is spread over the portfolio, so more seeds find more).
-  const int variants = std::clamp(job.variants > 0 ? job.variants : opt.work_budget > 0 ? route::portfolio_size() : threads, 1,
+  const int variants = std::clamp(job.variants > 0 ? job.variants : work_bounded ? route::portfolio_size() : threads, 1,
                                   job.variants > 0 ? 64 : route::portfolio_size());
   route::WorkProfile all_work;  // summed over the portfolio's variants (and over the advised runs)
 
@@ -2413,7 +2413,7 @@ RouteJobResult run_route_job(RouteJob job) {
   // The seed needs no --seed flag to qualify: RouterOptions::seed defaults to a fixed 1, so a --work --no-kb run
   // (the record_replay shape) is as repeatable as a seeded one. A run outside the contract may still repeat in
   // practice; it is just not promised.
-  out.summary["deterministic"] = !kb_used && (opt.work_budget > 0 || opt.round_work > 0) && !opt.halving &&
+  out.summary["deterministic"] = !kb_used && work_bounded && !opt.halving &&
                                   !out.summary["time_limited"].get<bool>() && !stopped_early;
   if (job.deterministic_mode) {
     // The mode's assertion (issue #17): the flag promised repeatability, so a run that left the contract says

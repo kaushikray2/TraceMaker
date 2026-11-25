@@ -15,6 +15,10 @@ On the usb-hub fixture with the default knowledge-base path live under an isolat
      deterministic false with a deterministic_violation naming the time limit.
   F) --deterministic --work 1000000 --kb FILE: the explicit --kb is honoured and reported as the
      violation (kb_used true, deterministic false, violation names the knowledge base).
+  G) --deterministic --round-work 20000 --rounds 1 at --threads 1 and 8 (no --work): identical boards,
+     deterministic true -- the variant set must not scale with --threads for a round-work budget.
+  H) --deterministic --relax --work 1000000: refused -- relax rounds are bounded by --round-work /
+     --rounds, not --work, so the wall clock would bind them.
 Exit 77 (skipped) when the fixture is missing.
 """
 import json
@@ -98,6 +102,20 @@ def main():
     check("knowledge base" in str(s.get("deterministic_violation", "")),
           f"F: violation does not name the knowledge base: {s.get('deterministic_violation')}")
     print(f"F: --kb violation reported: {s.get('deterministic_violation')}")
+
+    boards = []
+    for tag, threads in (("t1", 1), ("t8", 8)):
+        data, s = route(tm, home, cwd, cwd / f"g-{tag}.kicad_pcb", cwd / f"g-{tag}.json",
+                        "--deterministic", "--round-work", "20000", "--rounds", "1", "--threads", str(threads))
+        check(s.get("deterministic") is True, f"G/{tag}: deterministic not true with --round-work only")
+        boards.append(data)
+        print(f"G threads {threads}: routed {s.get("routed")}/{s.get("connections")}, {len(data)} bytes")
+    check(boards[0] == boards[1], "G: boards differ across thread counts under --deterministic --round-work")
+
+    p = route(tm, home, cwd, cwd / "h.kicad_pcb", cwd / "h.json",
+              "--deterministic", "--relax", "--work", "1000000", expect_fail=True)
+    check("--deterministic" in p.stderr, f"H: refusal does not name the mode: {p.stderr[-300:]}")
+    print("H: --relax with --work only refused (relax rounds are not bounded by --work)")
 
     print("deterministic_mode: all checks passed")
     return 0
