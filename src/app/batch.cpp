@@ -287,7 +287,7 @@ int run_batch(const std::string& manifest_path, int threads_override, const std:
   // stages claim the remainder through the #19 budget the batch sets once, below. Waiting
   // jobs hold no thread: a thread is spawned per running job only.
   const auto batch_t0 = std::chrono::steady_clock::now();
-  parallel::set_cap(threads);
+  parallel::CapScope cap_scope(threads);  // RAII: the cap is restored even if the scheduler throws (a bare set_cap(0) after the joins would be skipped)
   std::vector<Record> records(specs.size());
   std::mutex log_m;
   auto say = [&](const std::string& line) {
@@ -351,26 +351,28 @@ int run_batch(const std::string& manifest_path, int threads_override, const std:
     });
   }
   for (auto& th : live) th.join();
-  parallel::set_cap(0);
 
   const double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - batch_t0).count();
   int completed = 0, partial = 0, failed = 0;
+  double batch_peak_rss_mb = -1;
   json jobs = json::array();
   for (std::size_t i = 0; i < specs.size(); ++i) {
     const Record& rec = records[i];
     json j{{"name", specs[i].name}, {"input", specs[i].job.in}, {"output", specs[i].job.out}, {"json", specs[i].json_path},
            {"exit_code", rec.exit_code}, {"routed", rec.routed}, {"connections", rec.connections}, {"wall_s", rec.wall_s}};
-    if (rec.peak_rss_mb >= 0) j["peak_rss_mb"] = rec.peak_rss_mb;
+    if (rec.peak_rss_mb >= 0) j["process_peak_rss_mb"] = rec.peak_rss_mb;  // the job peak is the process high-water mark (getrusage), not this board alone; the batch peak is reported once, on the batch object
     if (!rec.error.empty()) j["error"] = rec.error;
     jobs.push_back(std::move(j));
+    batch_peak_rss_mb = std::max(batch_peak_rss_mb, rec.peak_rss_mb);
     if (!rec.error.empty() || rec.exit_code == 1) ++failed;
     else if (rec.exit_code == 0) ++completed;
     else ++partial;
   }
-  const json summary{{"batch", {{"version", std::string(version())}, {"manifest", manifest_path}, {"jobs", static_cast<int>(specs.size())},
+  json summary{{"batch", {{"version", std::string(version())}, {"manifest", manifest_path}, {"jobs", static_cast<int>(specs.size())},
                                 {"threads", threads}, {"wall_s", wall}, {"boards_completed", completed}, {"boards_partial", partial},
                                 {"boards_failed", failed}, {"peak_workers_granted", peak_granted}}},
                      {"jobs", std::move(jobs)}};
+  if (batch_peak_rss_mb >= 0) summary["batch"]["peak_rss_mb"] = batch_peak_rss_mb;
   if (!summary_out.empty()) {
     std::ofstream(summary_out) << summary.dump(1) << "\n";
   } else {

@@ -85,6 +85,12 @@ def main():
     p, _ = run(["route-batch", str(mp), "--json", str(WORK / "batch2.json")])
     check(p.returncode == 3, f"batch2: rc {p.returncode} != 3")
 
+    # batch 6: peak RSS is reported once, on the batch; job rows carry the process peak under its own name
+    b2 = json.loads((WORK / "batch2.json").read_text())
+    check("peak_rss_mb" in b2["batch"], f"batch6: batch peak missing: {b2}")
+    check(all("process_peak_rss_mb" in j and "peak_rss_mb" not in j for j in b2["jobs"]), f"batch6: job rows: {b2}")
+    check(b2["batch"]["peak_rss_mb"] >= max(j["process_peak_rss_mb"] for j in b2["jobs"]), "batch6: batch peak below a job row")
+
     # batch 3: per-board manifest errors are isolated; a jobless manifest is a usage error
     mp = manifest("m3.json", 8, [job("d.kicad_pcb", options={"sed": 42}),
                                  job("e.kicad_pcb", options={"threads": 4}),
