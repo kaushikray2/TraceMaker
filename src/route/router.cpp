@@ -7501,16 +7501,7 @@ struct Router::Impl {
       if (restart > opt.max_restarts) {
         nogoods.clear();
         rip_cap += 2;
-        for (std::size_t hi = 0; hi < history.slot_count();) {
-          if (!history.slot_used(hi)) {
-            ++hi;
-            continue;
-          }
-          std::uint16_t& hv = history.value_at(hi);
-          hv = static_cast<std::uint16_t>(hv / 2);
-          if (hv == 0) history.erase_at(hi);  // the entry shifted into this slot is unvisited: re-examine the slot
-          else ++hi;
-        }
+        history.decay_half();  // exact-once even across the slot ring's wrap (see flat_map.hpp)
         const RngStream rr(opt.seed, 0x5E57u, static_cast<std::uint64_t>(restart));
         std::vector<double> tie(cs.size());
         for (std::size_t i = 0; i < cs.size(); ++i) tie[i] = rr.uniform(i);

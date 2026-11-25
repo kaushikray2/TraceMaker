@@ -38,8 +38,10 @@ class FlatU64U16 {
     return slots_[i].value;
   }
 
-  // Slot access for in-place sweeps. erase_at uses backward shift: the entry shifted into
-  // the slot (if any) has not been visited yet, so a sweep must re-examine the same index.
+  // Slot access for read-only sweeps (the heatmap build). Do NOT erase in place during a
+  // hand-rolled sweep: backward shift moves an entry from a higher slot into the erased
+  // one, and across the ring wrap (last slot -> slot 0) that entry has already been
+  // visited, so it would be processed twice. Use decay_half() for in-place decay.
   std::size_t slot_count() const { return slots_.size(); }
   bool slot_used(std::size_t i) const { return slots_[i].used; }
   std::uint16_t& value_at(std::size_t i) { return slots_[i].value; }
@@ -66,6 +68,32 @@ class FlatU64U16 {
   void clear() {
     for (auto& s : slots_) s.used = false;
     n_ = 0;
+  }
+
+  // Halve every value in place, erasing entries whose value reaches 0 -- the history
+  // decay. Exact-once: the sweep starts just after an empty slot (one always exists at
+  // the <= 70 % load the growth rule keeps) and walks the ring from there. Backward-shift
+  // deletion never moves an entry across an empty slot, so every entry an erase shifts
+  // into the sweep's path comes from its own cluster, ahead of the sweep -- never from
+  // behind it, which is exactly what goes wrong across the wrap in a sweep from slot 0.
+  void decay_half() {
+    if (slots_.empty()) return;
+    const std::size_t n = slots_.size();
+    std::size_t s0 = 0;
+    while (s0 < n && slots_[s0].used) ++s0;  // the empty slot anchoring the sweep
+    if (s0 == n) return;                     // a full table cannot occur under the growth rule
+    for (std::size_t k = 1; k < n; ++k) {
+      std::size_t idx = s0 + k;
+      if (idx >= n) idx -= n;
+      if (!slots_[idx].used) continue;
+      const std::uint16_t hv = static_cast<std::uint16_t>(slots_[idx].value / 2);
+      if (hv == 0) {
+        erase_at(idx);
+        --k;  // re-examine idx: the entry shifted into it is unvisited
+      } else {
+        slots_[idx].value = hv;
+      }
+    }
   }
 
  private:
