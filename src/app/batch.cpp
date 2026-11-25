@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
+#include <limits>
 #include <condition_variable>
 #include <cstdio>
 #include <filesystem>
@@ -97,30 +99,37 @@ std::string apply_option(RouteJob& job, const std::string& key, const json& v, c
     return true;
   };
   if (key == "seed") {
-    if (!get_long()) return bad("an integer");
-    job.opt.seed = static_cast<decltype(job.opt.seed)>(lv);
+    if (v.is_number_unsigned()) {
+      job.opt.seed = v.get<std::uint64_t>();
+    } else if (v.is_number_integer()) {
+      if (v.get<long>() < 0) return bad("a non-negative integer");
+      job.opt.seed = static_cast<std::uint64_t>(v.get<long>());
+    } else {
+      return bad("an integer");
+    }
     job.seed_given = true;
   } else if (key == "work") {
-    if (!get_long()) return bad("an integer");
+    if (!get_long() || lv < 0) return bad("a non-negative integer");
     job.opt.work_budget = lv;
   } else if (key == "round_work") {
-    if (!get_long()) return bad("an integer");
+    if (!get_long() || lv < 0) return bad("a non-negative integer");
     job.opt.round_work = lv;
   } else if (key == "rounds") {
-    if (!get_long()) return bad("an integer");
+    if (!get_long() || lv < 0 || lv > std::numeric_limits<int>::max()) return bad("a non-negative integer");
     job.opt.rounds = static_cast<int>(lv);
   } else if (key == "time") {
-    if (!get_double()) return bad("a number");
+    if (!get_double() || !(dv >= 0) || !std::isfinite(dv)) return bad("a non-negative number");
     job.opt.time_limit_s = dv;
     job.time_given = true;
   } else if (key == "time_total") {
-    if (!get_double()) return bad("a number");
+    if (!get_double() || !(dv >= 0) || !std::isfinite(dv)) return bad("a non-negative number");
     job.time_total_s = dv;
   } else if (key == "variants") {
-    if (!get_long()) return bad("an integer");
+    if (!get_long() || lv < 0 || lv > std::numeric_limits<int>::max()) return bad("a non-negative integer");
     job.variants = static_cast<int>(lv);
   } else if (key == "repair") {
     if (!get_string()) return bad("a string");
+    if (sv != "auto" && sv != "on" && sv != "off") return bad("one of auto, on, off");
     job.repair = sv;
   } else if (key == "relax") {
     if (!get_bool()) return bad("a boolean");
@@ -133,7 +142,8 @@ std::string apply_option(RouteJob& job, const std::string& key, const json& v, c
     job.deterministic_mode = bv;
   } else if (key == "early_stop") {
     if (!get_bool()) return bad("a boolean");
-    if (bv) job.early_stop = true; else job.no_early_stop = true;
+    job.early_stop = bv;
+    job.no_early_stop = !bv;  // clear the sibling: route_job resolves no_early_stop first, so a stale one would silently override this board
   } else if (key == "kb") {
     if (!get_string()) return bad("a string");
     job.kb_path = resolve(base, sv);
@@ -157,7 +167,7 @@ std::string apply_option(RouteJob& job, const std::string& key, const json& v, c
     if (!get_string()) return bad("a string");
     job.reroute_window = sv;
   } else if (key == "copper_layers") {
-    if (!get_long()) return bad("an integer");
+    if (!get_long() || lv < 0 || lv > std::numeric_limits<int>::max()) return bad("a non-negative integer");
     job.copper_layers = static_cast<int>(lv);
   } else if (key == "warm_pcb") {
     if (!get_string()) return bad("a string");
@@ -200,6 +210,10 @@ int run_batch(const std::string& manifest_path, int threads_override, const std:
     }
     threads = m["threads"].get<int>();
   }
+  if (threads < 0) {
+    log("route-batch: \"threads\" must not be negative");
+    return 2;
+  }
   if (threads <= 0) threads = static_cast<int>(std::thread::hardware_concurrency());
   if (threads <= 0) threads = 8;
   json global_options = json::object();
@@ -237,6 +251,7 @@ int run_batch(const std::string& manifest_path, int threads_override, const std:
         }
       }
     }
+    if (sp.error.empty() && (input.empty() || output.empty())) sp.error = "a job needs non-empty \"input\" and \"output\" paths";
     if (sp.error.empty() && e.contains("options") && !e["options"].is_object()) sp.error = "\"options\" must be an object";
     sp.name = input.empty() ? std::string("?") : fs::path(input).stem().string();
     if (jsonp.empty() && !output.empty()) {

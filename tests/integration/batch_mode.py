@@ -101,6 +101,23 @@ def main():
     mp.write_text(json.dumps({"jobs": []}))
     p, _ = run(["route-batch", str(mp)])
     check(p.returncode == 2, f"batch3 empty manifest: rc {p.returncode} != 2")
+    # batch 4: manifest values are validated per board, like the CLI validates flags
+    mp = manifest("m5.json", 8, [job("g.kicad_pcb", options={"repair": "bogus"}),
+                                 job("h.kicad_pcb", options={"work": -5}),
+                                 {"input": str(SRC), "output": ""}])
+    p, _ = run(["route-batch", str(mp), "--json", str(WORK / "batch4.json")])
+    check(p.returncode == 1, f"batch4: rc {p.returncode} != 1")
+    g = json.loads((WORK / "g.json").read_text())
+    check("repair" in (g.get("error") or ""), f"batch4 g: {g}")
+    h = json.loads((WORK / "h.json").read_text())
+    check("work" in (h.get("error") or ""), f"batch4 h: {h}")
+    ij = json.loads((WORK / "batch4.json").read_text())
+    errs = [j.get("error") or "" for j in ij["jobs"]]
+    check(any("non-empty" in e for e in errs), f"batch4 empty output: {errs}")
+    mp = manifest("m6.json", -2, [job("z.kicad_pcb", **opts)])
+    p, _ = run(["route-batch", str(mp)])
+    check(p.returncode == 2, f"batch4 negative threads: rc {p.returncode} != 2")
+
     print("PASS batch_mode")
     return 0
 
