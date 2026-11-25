@@ -297,6 +297,10 @@ RouteJobResult run_route_job(RouteJob job) {
   if (!job.heartbeat_out.empty() && !(job.heartbeat_s > 0)) throw std::invalid_argument("--heartbeat-s: expected seconds (> 0)");
   if (job.route_open_only && job.repair == "off")
     throw std::invalid_argument("--route-open-only is the repair-driven finisher: it cannot combine with --repair off");
+  if ((!job.reroute_nets.empty() || !job.reroute_window.empty()) && job.reroute)
+    throw std::invalid_argument("--reroute strips every unlocked track and via; --reroute-net / --reroute-window scope that strip -- give one or the other");
+  if ((!job.reroute_nets.empty() || !job.reroute_window.empty()) && job.route_open_only)
+    throw std::invalid_argument("--route-open-only finishes a board as it stands; it does not combine with --reroute-net / --reroute-window");
   if (!(job.rescue_share > 0 && job.rescue_share <= 1)) throw std::invalid_argument("--rescue-share: expected a fraction in (0, 1]");
   if (job.time_total_s > 0) opt.time_limit_s = job.time_total_s * (job.rescue && !opt.relax ? job.rescue_share : 1.0);
   // Whole-job determinism (issue #16): a work-budgeted job with no explicit --time and no
@@ -405,6 +409,106 @@ RouteJobResult run_route_job(RouteJob job) {
       std::filesystem::remove(tmp);
     }
     log(fmt("reroute: %d unlocked tracks and vias removed", removed));
+  }
+  // Bystander-safe scoped reroute (Tier 1). The scope is the union of the --reroute-net
+  // patterns and, for --reroute-window, the nets with a pad inside the window. The scope's
+  // unlocked copper is ripped (in window mode only where it meets the window); everything
+  // else is locked in the MODEL only -- the document keeps its original lock flags, so the
+  // written board is unchanged outside the scope -- and every out-of-scope net is skipped,
+  // so its pre-existing opens are not routed either. What stays of an in-scope net (locked
+  // copper; window-mode copper outside the window) is the fixed anchor the re-route must
+  // connect to: the ratsnest is computed from connectivity, so a boundary stub joins its
+  // pad's component and the open connection spans the boundary.
+  bool reroute_scoped = false;
+  std::vector<std::string> rerouted_names;
+  int ripped_tracks = 0, ripped_arcs = 0, ripped_vias = 0;
+  bool reroute_has_window = false;
+  double reroute_window_mm[4] = {0, 0, 0, 0};
+  if (!job.reroute_nets.empty() || !job.reroute_window.empty()) {
+    reroute_scoped = true;
+    const model::Board& bd = lb.board;
+    std::set<model::NetId> scope;
+    Coord wx1 = 0, wy1 = 0, wx2 = 0, wy2 = 0;
+    if (!job.reroute_window.empty()) {
+      double w[4] = {0, 0, 0, 0};
+      bool ok = true;
+      std::stringstream ss(job.reroute_window);
+      std::string tok;
+      int i = 0;
+      while (std::getline(ss, tok, ',')) {
+        if (i >= 4) { ok = false; break; }
+        try {
+          std::size_t used = 0;
+          w[i] = std::stod(tok, &used);
+          if (used != tok.size()) ok = false;
+        } catch (...) { ok = false; }
+        ++i;
+      }
+      if (!ok || i != 4) throw std::invalid_argument("--reroute-window takes X1,Y1,X2,Y2 in board mm, got '" + job.reroute_window + "'");
+      reroute_has_window = true;
+      for (int k = 0; k < 4; ++k) reroute_window_mm[k] = w[k];
+      wx1 = static_cast<Coord>(std::llround(std::min(w[0], w[2]) * 1e6));
+      wx2 = static_cast<Coord>(std::llround(std::max(w[0], w[2]) * 1e6));
+      wy1 = static_cast<Coord>(std::llround(std::min(w[1], w[3]) * 1e6));
+      wy2 = static_cast<Coord>(std::llround(std::max(w[1], w[3]) * 1e6));
+      for (const auto& pad : bd.pads)
+        if (pad.net > 0 && pad.pos.x >= wx1 && pad.pos.x <= wx2 && pad.pos.y >= wy1 && pad.pos.y <= wy2) scope.insert(pad.net);
+      if (scope.empty()) throw std::invalid_argument("--reroute-window covers no pad of any net on this board");
+    }
+    for (const auto& pat : job.reroute_nets) {
+      bool any = false;
+      for (const auto& n : bd.nets)
+        if (n.id > 0 && !n.name.empty() && (pat == n.name || model::pattern_match(pat, n.name))) { scope.insert(n.id); any = true; }
+      if (!any) log("warning: --reroute-net pattern '" + pat + "' matches no net of the board");
+    }
+    if (scope.empty()) throw std::invalid_argument("--reroute-net / --reroute-window selected no net on this board");
+    auto in_window = [&](model::Point q) { return !reroute_has_window || (q.x >= wx1 && q.x <= wx2 && q.y >= wy1 && q.y <= wy2); };
+    auto seg_hits = [&](model::Point a, model::Point b) {
+      if (!reroute_has_window || in_window(a) || in_window(b)) return true;
+      auto cross = [](model::Point o, model::Point p, model::Point q) -> long long {
+        return static_cast<long long>(p.x - o.x) * (q.y - o.y) - static_cast<long long>(p.y - o.y) * (q.x - o.x);
+      };
+      auto seg_seg = [&](model::Point p1, model::Point p2, model::Point p3, model::Point p4) {
+        const long long d1 = cross(p3, p4, p1), d2 = cross(p3, p4, p2), d3 = cross(p1, p2, p3), d4 = cross(p1, p2, p4);
+        return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
+      };
+      const model::Point c1{wx1, wy1}, c2{wx2, wy1}, c3{wx2, wy2}, c4{wx1, wy2};
+      return seg_seg(a, b, c1, c2) || seg_seg(a, b, c2, c3) || seg_seg(a, b, c3, c4) || seg_seg(a, b, c4, c1);
+    };
+    auto rip = [&](auto& items, auto&& hits, int& count) {
+      for (std::size_t i = items.size(); i-- > 0;) {
+        auto& it = items[i];
+        if (it.locked || scope.count(it.net) == 0 || !hits(it)) continue;
+        if (it.node != sexpr::kNoNode) lb.doc.remove(it.node);
+        items.erase(items.begin() + static_cast<std::ptrdiff_t>(i));
+        ++count;
+      }
+    };
+    rip(lb.board.tracks, [&](const model::Track& tr) { return seg_hits(tr.a, tr.b); }, ripped_tracks);
+    rip(lb.board.arcs,
+        [&](const model::ArcTrack& tr) {
+          if (!reroute_has_window) return true;
+          const Coord hw = tr.width / 2;
+          return std::min({tr.a.x, tr.mid.x, tr.b.x}) - hw <= wx2 && std::max({tr.a.x, tr.mid.x, tr.b.x}) + hw >= wx1 &&
+                 std::min({tr.a.y, tr.mid.y, tr.b.y}) - hw <= wy2 && std::max({tr.a.y, tr.mid.y, tr.b.y}) + hw >= wy1;
+        },
+        ripped_arcs);
+    rip(lb.board.vias, [&](const model::Via& v) { return in_window(v.pos); }, ripped_vias);
+    for (auto& tr : lb.board.tracks) tr.locked = true;
+    for (auto& tr : lb.board.arcs) tr.locked = true;
+    for (auto& v : lb.board.vias) v.locked = true;
+    std::string names;
+    for (const auto& n : bd.nets) {
+      if (n.id <= 0 || n.name.empty()) continue;
+      if (scope.count(n.id)) {
+        rerouted_names.push_back(n.name);
+        names += (names.empty() ? "" : ", ") + n.name;
+      } else if (std::find(opt.skip_nets.begin(), opt.skip_nets.end(), n.name) == opt.skip_nets.end()) {
+        opt.skip_nets.push_back(n.name);
+      }
+    }
+    log(fmt("scoped reroute: ripped %d tracks, %d arcs, %d vias of %zu net(s) (%s); all other copper is fixed for this run", ripped_tracks,
+            ripped_arcs, ripped_vias, rerouted_names.size(), names.c_str()));
   }
   // The document after edits, parsed again, so the model and the node ids match what will be written.
   auto reparse = [&] {
@@ -2351,6 +2455,14 @@ RouteJobResult run_route_job(RouteJob job) {
       out.summary["route_open_only"] = true;
       out.summary["open_at_start"] = res.connections;  // the input's ratsnest: connections is a property of the board as read, unchanged by the stages
     }
+    if (reroute_scoped) {
+      nlohmann::json rr{{"ripped_tracks", ripped_tracks}, {"ripped_arcs", ripped_arcs}, {"ripped_vias", ripped_vias}};
+      nlohmann::json nets = nlohmann::json::array();
+      for (const auto& n : rerouted_names) nets.push_back(n);
+      rr["nets"] = std::move(nets);
+      if (reroute_has_window) rr["window_mm"] = {reroute_window_mm[0], reroute_window_mm[1], reroute_window_mm[2], reroute_window_mm[3]};
+      out.summary["rerouted"] = std::move(rr);
+    }
   }
   out.summary["completion_pct"] = res.connections > 0 ? std::round(10000.0 * res.routed / res.connections) / 100.0 : 100.0;
   {
@@ -2635,6 +2747,7 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
         if (conns > 0) best->summary["completion_pct"] = 100.0 * (conns - open) / conns;
         best->summary.erase("failures");
         best->summary.erase("open_connections");  // chains moved copper without a route: the previous rung's per-connection detail is stale too
+        best->summary.erase("rerouted");  // the rip belongs to the first rung's input, not to the board the chains finished
         best->summary["exit_code"] = open == 0 ? 0 : 3;
         fs::copy_file(best_tmp, final_out, fs::copy_options::overwrite_existing);
         copy_project_files(job.in, final_out);

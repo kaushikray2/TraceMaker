@@ -84,6 +84,12 @@ struct RouteJob {
   // --reroute: remove every unlocked track and via first and route the whole board again (locked copper, arcs and
   // zones stay; rule 6).
   bool reroute = false;
+  // Bystander-safe scoped reroute (Tier 1): strip only the in-scope copper and re-route it;
+  // every other net's copper is fixed for the run and its opens are left alone.
+  // reroute_nets takes net patterns (as --only-net); reroute_window takes "x1,y1,x2,y2" in
+  // board mm and scopes to the nets with a pad inside the window. The two combine as a union.
+  std::vector<std::string> reroute_nets;
+  std::string reroute_window;
   // --repair (issue #56, doc 05 §75, D172): connections still open at the end are tried again with the unlocked copper near them
   // lifted (a window that grows on each failure) and routed again; an attempt is kept only if nothing that was joined comes apart
   // and fewer connections are open. "auto" (default): only on a board that came with unlocked tracks or vias (a partly routed

@@ -1351,6 +1351,14 @@ static int run_main(int argc, char** argv) {
                   "with the repair windows in focused form -- each attempt routes only the open connection and the nets whose copper it "
                   "lifted, with a per-connection budget (the job's --work, or four times the repair default) and portfolio attempts when "
                   "the job runs variants. The route JSON reports route_open_only and open_at_start");
+  route->add_option("--reroute-net", r_job.reroute_nets,
+                    "With --route: bystander-safe re-route of only the named nets (pattern, repeatable, comma-separated): "
+                    "their unlocked copper is stripped and re-routed, all other copper stays fixed and untouched")
+      ->delimiter(',');
+  route->add_option("--reroute-window", r_job.reroute_window,
+                    "With --route: bystander-safe re-route of the nets with a pad inside X1,Y1,X2,Y2 (board mm): their "
+                    "copper inside the window is stripped and re-routed; copper crossing the boundary stays as fixed "
+                    "anchors and nets with no pad inside are untouched");
   route->add_option("--repair-window-mm", r_job.repair_opt.radii_mm, "Repair: window radii round each end of an open connection, tried in turn (default 1,2,4)")
       ->delimiter(',')->allow_extra_args(false);
   route->add_option("--repair-work", r_job.repair_opt.step_work, "Repair: work budget of each attempt in search expansions (default 3000000)");
