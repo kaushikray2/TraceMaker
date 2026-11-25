@@ -23,6 +23,7 @@
 #include "analysis/escape_proof.hpp"
 #include "analysis/return_path.hpp"
 #include "app/route_job.hpp"
+#include "app/batch.hpp"
 #include "app/tui.hpp"
 #include "app/tui_jobs.hpp"
 #include "core/live.hpp"
@@ -1564,6 +1565,16 @@ static int run_main(int argc, char** argv) {
   route->add_option("--stitch-return", r_job.stitch_returns, "Return-path stitching for nets as PATTERN=PLANE_NET, e.g. 'USB_D*=GND' (repeatable). Return-path stitching from component rules is experimental");
   route->add_option("--pass-work", r_job.pass_work, "Work budget of each after-route pass, in exact checks (default 2,000,000)")->check(CLI::PositiveNumber);
 
+  auto* batch_cmd = app.add_subcommand("route-batch", "Route every board of a JSON manifest in one process, through one global thread pool (issue #22)");
+  std::string batch_manifest, batch_json;
+  int batch_threads = 0;
+  batch_cmd->add_option("manifest", batch_manifest,
+                        "Batch manifest JSON: {\"threads\": N, \"options\": {...}, \"jobs\": [{\"input\", \"output\", \"json\", \"options\"}]}")
+      ->required()
+      ->check(CLI::ExistingFile);
+  batch_cmd->add_option("--threads", batch_threads, "Worker cap for the whole batch (default: the manifest's \"threads\", else the hardware concurrency)");
+  batch_cmd->add_option("--json", batch_json, "Write the batch summary JSON here (default: print it)");
+
   auto* rep = app.add_subcommand("report", "Render the run report from a route summary (route --json, with the sections route --report adds)");
   std::string rep_json, rep_out;
   rep->add_option("summary", rep_json, "Summary file (JSON)")->required()->check(CLI::ExistingFile);
@@ -1913,6 +1924,12 @@ static int run_main(int argc, char** argv) {
       const int n = tmk::app::inject_defects(bk_in, bk_out, bk_manifest, bk_kind, bk_seed, bk_count);
       std::printf("%d %s defects injected\n", n, bk_kind.c_str());
       return 0;
+    }
+    if (*batch_cmd) {
+      return tmk::app::run_batch(batch_manifest, batch_threads, batch_json, [](const std::string& line) {
+        std::printf("%s\n", line.c_str());
+        std::fflush(stdout);
+      });
     }
     if (*route) {
       tmk::route::check_layer_dir_specs(r_job.layer_dir, r_job.layer_diag_pen);  // a typo stops the run before the board is read

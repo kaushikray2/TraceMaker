@@ -20,6 +20,7 @@ struct RouteJob {
   std::string out;                // output .kicad_pcb; empty = do not write a board
   route::RouterOptions opt;       // `sink` is set here when viewing or recording
   int threads = 8;                // worker threads for the portfolio variants
+  bool external_cap = false;      // route-batch (issue #22): the caller owns the process-wide thread cap for the whole batch; the job must not re-scope it
   // Portfolio size (1 = single router). 0 = automatic: all variants (route::portfolio_size()) with a work budget,
   // so the output does not depend on `threads` (D47); otherwise `threads` (wall-clock mode: one variant per thread).
   int variants = 0;

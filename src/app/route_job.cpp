@@ -267,7 +267,10 @@ RouteJobResult run_route_job(RouteJob job) {
   // boundaries below. Escape analysis and legalise are not job stages in this engine: per-connection pad
   // escape and the relax rounds' legalise step are route_portfolio's work, so their time sits in `search`.
   double parse_s = 0, search_s = 0, repair_s = 0, refill_s = 0, save_s = 0;
-  const parallel::CapScope cap_scope(std::max(1, job.threads));  // Stage 2B #19: this job's threads value is the process-wide worker cap, for this job's scope only
+  // Stage 2B #19: this job's threads value is the process-wide worker cap, for this job's scope only.
+  // A batch job (issue #22) leaves the cap to the batch, which sets it once for all its jobs.
+  std::optional<parallel::CapScope> cap_scope;
+  if (!job.external_cap) cap_scope.emplace(std::max(1, job.threads));
   bool stopped_early = false;  // issue #20: aggregated over the main run and every challenger below
   std::string stopped_by;      // issue #21: what stopped the rounds stage of the run whose result stands
   int es_cancelled = 0;
