@@ -445,7 +445,8 @@ RouteJobResult run_route_job(RouteJob job) {
         try {
           std::size_t used = 0;
           w[i] = std::stod(tok, &used);
-          if (used != tok.size() || !std::isfinite(w[i])) ok = false;  // stod accepts nan and inf; both are malformed here
+          // The 1e6 mm bound keeps the llround conversion far inside int64: an absurd finite value (1e300) is finite but unconvertible.
+          if (used != tok.size() || !std::isfinite(w[i]) || std::abs(w[i]) > 1e6) ok = false;  // stod accepts nan and inf; both are malformed here
         } catch (...) { ok = false; }
         ++i;
       }

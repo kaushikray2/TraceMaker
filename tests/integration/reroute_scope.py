@@ -181,6 +181,8 @@ def main():
     check(p.returncode == 1, f"refusal trailing-comma window: rc {p.returncode}")
     p = route(str(full), "-o", str(WORK / "x.kicad_pcb"), "--no-gpu", "--reroute-window", "nan,0,1,1")
     check(p.returncode == 1, f"refusal nan window: rc {p.returncode}")
+    p = route(str(full), "-o", str(WORK / "x.kicad_pcb"), "--no-gpu", "--reroute-window", "1e300,0,1,1")
+    check(p.returncode == 1 and "takes X1,Y1,X2,Y2" in p.stderr, f"refusal huge window: rc {p.returncode}: {p.stderr[-200:]}")
     p = route(str(full), "-o", str(WORK / "x.kicad_pcb"), "--no-gpu", "--reroute-net", "NOPE*")
     check(p.returncode == 1, f"refusal empty net scope: rc {p.returncode}")
     p = route(str(full), "-o", str(WORK / "x.kicad_pcb"), "--no-gpu", "--reroute-window", "0,0,1,1")
