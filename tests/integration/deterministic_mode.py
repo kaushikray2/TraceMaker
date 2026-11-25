@@ -109,7 +109,7 @@ def main():
                         "--deterministic", "--round-work", "20000", "--rounds", "1", "--threads", str(threads))
         check(s.get("deterministic") is True, f"G/{tag}: deterministic not true with --round-work only")
         boards.append(data)
-        print(f"G threads {threads}: routed {s.get("routed")}/{s.get("connections")}, {len(data)} bytes")
+        print(f"G threads {threads}: routed {s.get('routed')}/{s.get('connections')}, {len(data)} bytes")
     check(boards[0] == boards[1], "G: boards differ across thread counts under --deterministic --round-work")
 
     p = route(tm, home, cwd, cwd / "h.kicad_pcb", cwd / "h.json",
