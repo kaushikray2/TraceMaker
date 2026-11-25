@@ -517,6 +517,15 @@ RouteJobResult run_route_job(RouteJob job) {
   auto reparse = [&] {
     lb.doc = sexpr::Document::parse(lb.doc.write());
     lb.board = io::read_board(lb.doc);
+    if (reroute_scoped) {
+      // The scoped rip locked every surviving item in the model only (the document keeps the
+      // original lock flags, so the output file preserves them). A fresh parse reads the
+      // document, so it would silently drop those locks and let later stages treat bystander
+      // copper as rippable; re-apply them.
+      for (auto& tr : lb.board.tracks) tr.locked = true;
+      for (auto& tr : lb.board.arcs) tr.locked = true;
+      for (auto& v : lb.board.vias) v.locked = true;
+    }
   };
   if (job.copper_layers > 0 && job.copper_layers != lb.board.copper_count()) {
     const int had = lb.board.copper_count();

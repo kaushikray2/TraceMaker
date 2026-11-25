@@ -154,6 +154,24 @@ def main():
             continue
         check(base.get(name, set()) == after.get(name, set()), f"window arm: out-of-scope net {name} changed")
 
+    # ---- layers arm: scoped reroute combined with --copper-layers ----
+    # The layer-count edit re-parses the board from the document mid-job; the scoped
+    # locks live only in the model, so a reparse that drops them lets the route rip
+    # bystander copper. Bystanders must still be byte-identical to F.
+    cu = sorted(set(re.findall("[A-Za-z0-9_.]+[.]Cu", full.read_text())))
+    target = len(cu) + 2 + (len(cu) % 2)  # layer counts are even; the token count can over-read by one
+    out, oj = WORK / "layers.kicad_pcb", WORK / "layers.json"
+    p = route(str(full), "-o", str(out), "--json", str(oj), "--no-gpu", "--reroute-net", "D2-",
+              "--copper-layers", str(target), "--work", "20000000", "--seed", "42")
+    check(p.returncode == 0, f"layers arm: rc {p.returncode}: {p.stderr[-300:]}")
+    s = json.loads(oj.read_text())
+    check(s.get("routed") == s.get("connections"), "layers arm: not all connections routed")
+    after = copper(out)
+    for name in set(base) | set(after):
+        if name == "D2-":
+            continue
+        check(base.get(name, set()) == after.get(name, set()), f"layers arm: bystander net {name} changed")
+    check(base.get("D2-") != after.get("D2-"), "layers arm: D2- copper unchanged")
     # ---- refusals ----
     p = route(str(full), "-o", str(WORK / "x.kicad_pcb"), "--no-gpu", "--reroute-net", "D2-", "--reroute")
     check(p.returncode == 1, f"refusal reroute+scoped: rc {p.returncode}")
