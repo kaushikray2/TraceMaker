@@ -1387,7 +1387,9 @@ static int run_main(int argc, char** argv) {
       ->check(CLI::NonNegativeNumber);
   route->add_option("--threads", r_threads,
                     "Threads for the portfolio (differently configured routers, best kept). Without --variants it is also the portfolio "
-                    "size, except with --work, where all variants run and the output is identical for any thread count");
+                    "size, except with --work, where all variants run and the output is identical for any thread count. A hard global cap "
+                    "for the whole job: no stage (portfolio, zone refill, repair) runs more concurrent workers than this, and the process "
+                    "thread peak stays within the cap + 2 (the main thread and the live-log writer)");
   int r_variants = 0;
   route->add_option("--variants", r_variants,
                     "Portfolio size (1 = single router; default: all with --work, else --threads); the output never depends on --threads "

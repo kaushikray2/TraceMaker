@@ -66,15 +66,27 @@ clean; ctest 495/495; two seeded usb-hub runs produced byte-identical
 boards (112/113, unchanged), stages summed to `seconds` exactly, peak
 RSS 435–449 MB.
 
+### Stage 2B step 4 — --threads as a hard global cap (2026-11-24, #19)
+New `src/core/parallel.hpp`: a process-wide worker budget. A route job
+sets the cap from its --threads; route_portfolio registers its variant
+workers as primary, and zone refill's per-layer fan-out (the one stage
+that ignored --threads, including when called inside a search) now
+runs at most the allowance the cap leaves free — inline when the
+portfolio holds the whole cap. The route JSON reports
+`threads_effective`; --help documents the cap and the +2 allowance
+(main thread + live-log writer). Verified: build clean; ctest 495/495;
+OS thread peaks measured at 50 ms sampling on the seeded usb-hub run:
+--threads 2 -> peak 4 (= cap + 2) on two runs, --threads 8 -> peak 10;
+boards byte-identical between the two --threads 2 runs and the routed
+count (112/113) unchanged at 2 and 8 threads.
+
 ## In progress
 
-Nothing in flight at this commit; the next item is #19 (see Remaining).
+Nothing in flight at this commit; the next item is #20 (see Remaining).
 
 ## Remaining (in sequence)
 
 ### Stage 2B — CPU performance (rest)
-- #19 --threads as a documented hard global cap + threads_effective in
-  the JSON (~0.5-1 d; audit of every thread-spawn site).
 - #20 Portfolio sibling early-stop when a variant fully routes
   (~1-1.5 d; --no-early-stop keeps measurement runs pure).
 - Radix heap for the open list; flat open-addressing hash maps; spatial

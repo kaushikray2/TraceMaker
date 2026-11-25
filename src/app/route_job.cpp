@@ -28,6 +28,7 @@
 #if defined(__linux__) || defined(__APPLE__)
 #include <sys/resource.h>  // getrusage: the route JSON peak RSS (Stage 2B #18)
 #endif
+#include "core/parallel.hpp"
 #include "analysis/return_path.hpp"
 #include "advice/advisor.hpp"
 #include "advice/stuck_report.hpp"
@@ -265,6 +266,7 @@ RouteJobResult run_route_job(RouteJob job) {
   // boundaries below. Escape analysis and legalise are not job stages in this engine: per-connection pad
   // escape and the relax rounds' legalise step are route_portfolio's work, so their time sits in `search`.
   double parse_s = 0, search_s = 0, repair_s = 0, refill_s = 0, save_s = 0;
+  parallel::set_cap(std::max(1, job.threads));  // Stage 2B #19: this job threads value is the process-wide worker cap
   auto log = [&](const std::string& line) {
     live::log(line);
     if (job.log) job.log(line);
@@ -2058,6 +2060,7 @@ RouteJobResult run_route_job(RouteJob job) {
     out.summary["stages"] = {{"parse", parse_s}, {"search", search_s}, {"repair", repair_s},
                              {"refill", refill_s}, {"save", save_s},   {"other", other_s}};
     out.summary["peak_rss_mb"] = peak_rss_mb();
+    out.summary["threads_effective"] = threads;  // Stage 2B #19: the worker cap in force for this job
   }
   // M22 repair steps (D156), only when they ran: a run without them writes the summary it always did.
   for (const auto& [k, v] : {std::pair<const char*, long>{"via_shoves", res.via_shoves}, {"via_shove_trials", res.via_shove_trials}, {"window_escalations", res.window_escalations},

@@ -32,6 +32,7 @@
 
 #include "core/live.hpp"
 #include "core/rng.hpp"
+#include "core/parallel.hpp"
 #include "drc/connectivity.hpp"
 #include "gpu/device.hpp"
 #include "gpu/field.hpp"
@@ -8176,6 +8177,7 @@ PortfolioResult route_portfolio(const model::Board& board, const model::DesignRu
                   base.relax ? "relax" : !base.state_in.empty() || base.start_routes ? "a warm start" : "rounds", vs.size(), threads,
                   threads == 1 ? "" : "s");
   if (halve && !rounds_asked) {
+    parallel::PrimaryScope primary_workers(threads);  // Stage 2B #19: the rung pools are the job primary workers
     // Rung sizes n, n/2, ... down to `threads`.
     std::vector<std::size_t> sizes{vs.size()};
     while (sizes.back() > static_cast<std::size_t>(threads)) sizes.push_back(std::max(static_cast<std::size_t>(threads), sizes.back() / 2));
@@ -8279,6 +8281,7 @@ PortfolioResult route_portfolio(const model::Board& board, const model::DesignRu
   // result: each Router owns all of its state, its clock starts when it starts, and in work-budget mode nothing is
   // shared between variants (the shared deadline is wall-clock mode only).
   const std::size_t workers = threads <= 0 ? vs.size() : std::min(vs.size(), static_cast<std::size_t>(threads));
+  parallel::PrimaryScope primary_workers(static_cast<int>(workers));  // Stage 2B #19: registered while any portfolio pool runs, so secondary stages (zone refill inside a search) stay under the cap
   // Total order on (routed desc, vias asc, length asc, variant index asc): the winner depends neither on the order
   // in which variants finished nor on their positions in `pick`.
   auto better = [&](std::size_t i, std::size_t j) {
