@@ -55,15 +55,24 @@ previous stores were OOM-killed at ~23 GB. The remaining 8-variant weight
 sits in per-variant ClassCache and field state — addressed by the
 field_cpu item below.
 
+### Stage 2B step 3 — per-stage timing + peak RSS (2026-11-24, #18)
+Every route job's JSON now carries a `stages` block (parse / search /
+repair / refill / save / other — `other` is the residual, so the stages
+sum to `seconds` by construction) and `peak_rss_mb` (getrusage).
+Escape analysis and legalise are not job stages in this engine:
+per-connection pad escape and the relax rounds' legalise step are
+route_portfolio's work, so their time sits in `search`. Verified: build
+clean; ctest 495/495; two seeded usb-hub runs produced byte-identical
+boards (112/113, unchanged), stages summed to `seconds` exactly, peak
+RSS 435–449 MB.
+
 ## In progress
 
-Nothing in flight at this commit; the next item is #18 (see Remaining).
+Nothing in flight at this commit; the next item is #19 (see Remaining).
 
 ## Remaining (in sequence)
 
 ### Stage 2B — CPU performance (rest)
-- #18 Per-stage timing + peak RSS in the route JSON (~0.5 d). The
-  measurement base for every claim below.
 - #19 --threads as a documented hard global cap + threads_effective in
   the JSON (~0.5-1 d; audit of every thread-spawn site).
 - #20 Portfolio sibling early-stop when a variant fully routes

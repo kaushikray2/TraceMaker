@@ -25,6 +25,9 @@
 
 #include "advice/advice.hpp"
 #include "analysis/escape_proof.hpp"
+#if defined(__linux__) || defined(__APPLE__)
+#include <sys/resource.h>  // getrusage: the route JSON peak RSS (Stage 2B #18)
+#endif
 #include "analysis/return_path.hpp"
 #include "advice/advisor.hpp"
 #include "advice/stuck_report.hpp"
@@ -240,8 +243,28 @@ int default_gpu_device(bool use_gpu) {
   return devs.empty() ? -1 : devs.front().index;
 }
 
+// Peak resident set size of this process so far, in MiB (Stage 2B #18): the route JSON's memory
+// headline next to its per-stage times. ru_maxrss is KiB on Linux, bytes on macOS; 0 elsewhere.
+static double peak_rss_mb() {
+#if defined(__linux__) || defined(__APPLE__)
+  struct rusage ru {};
+  if (getrusage(RUSAGE_SELF, &ru) != 0) return 0;
+#if defined(__APPLE__)
+  return static_cast<double>(ru.ru_maxrss) / (1024.0 * 1024.0);
+#else
+  return static_cast<double>(ru.ru_maxrss) / 1024.0;
+#endif
+#else
+  return 0;
+#endif
+}
+
 RouteJobResult run_route_job(RouteJob job) {
   const auto t_job = std::chrono::steady_clock::now();
+  // Stage 2B #18: per-stage wall times for the route JSON's `stages` block, marked at the job's section
+  // boundaries below. Escape analysis and legalise are not job stages in this engine: per-connection pad
+  // escape and the relax rounds' legalise step are route_portfolio's work, so their time sits in `search`.
+  double parse_s = 0, search_s = 0, repair_s = 0, refill_s = 0, save_s = 0;
   auto log = [&](const std::string& line) {
     live::log(line);
     if (job.log) job.log(line);
@@ -887,6 +910,8 @@ RouteJobResult run_route_job(RouteJob job) {
     return !length_rules || drc::length_faults_no_worse(length_faults_of(t0, v0), length_faults_of(t1, v1));
   };
   auto route_t0 = std::chrono::steady_clock::now();  // --time covers one routing run, the refill repair after it included
+  parse_s = std::chrono::duration<double>(route_t0 - t_job).count();
+  const auto t_search0 = route_t0;
   std::vector<int> ran;
   int best_index = 0;
   std::string best_name;
@@ -1208,6 +1233,8 @@ RouteJobResult run_route_job(RouteJob job) {
     for (const auto& u : res.unrouted) failed.push_back({u.net, u.a, u.b, 1});
     kb->record_failures(feat.hash, failed);
   }
+  const auto t_repair0 = std::chrono::steady_clock::now();
+  search_s = std::chrono::duration<double>(t_repair0 - t_search0).count();
   // Repair windows (issue #56, doc 05 §75, D172): connections still open are tried again with the unlocked copper near them lifted.
   nlohmann::json repair_summary;
   std::optional<model::Board> board_before_repair;  // the input as read, for the report's DRC "before" when the repair lifted some of it
@@ -1312,6 +1339,8 @@ RouteJobResult run_route_job(RouteJob job) {
   // Soft zones (doc 05 §36): the router cut through stale fills and trusted them for connectivity. Refill them for
   // the new copper as KiCad will, count what is still unconnected, and route those connections again with the
   // refilled fills as fixed copper (pass 2, its own budget equal to the first pass's).
+  repair_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_repair0).count();
+  const auto t_refill0 = std::chrono::steady_clock::now();
   nlohmann::json refill_summary;
   int unconnected_after_refill = -1;
   if (opt.soft_zones) {
@@ -1532,6 +1561,7 @@ RouteJobResult run_route_job(RouteJob job) {
     }
     out.unconnected_after_refill = unconnected_after_refill;
   }
+  refill_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_refill0).count();
   // After-route passes (doc 05 §39). Each works on the routed copper as a transaction: its result is judged by
   // the number of unconnected items (after a refill when fills are soft or vias were added) and dropped if that
   // number went up.
@@ -1775,6 +1805,7 @@ RouteJobResult run_route_job(RouteJob job) {
                               {"area_mm2", std::round(area / 1e10) / 100.0}});
     }
   }
+  const auto t_save0 = std::chrono::steady_clock::now();
   if (!job.out.empty()) {
     live::field("stage", "writing the board");
     io::BoardEditor ed(lb, opt.seed);
@@ -1784,6 +1815,7 @@ RouteJobResult run_route_job(RouteJob job) {
     ed.save(job.out);
     copy_project_files(job.in, job.out);
   }
+  save_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_save0).count();
   // Reference-return audit (issue #7, doc 05 §42): the selected nets on the board as routed, fills redone for the new copper.
   nlohmann::json return_path_summary;
   {
@@ -2020,6 +2052,13 @@ RouteJobResult run_route_job(RouteJob job) {
                  {"escape_corridor_mm", res.escape_corridor_mm}, {"package_pin_edges", res.package_pin_edges}, {"line_crossings", res.line_crossings}, {"escape_reclaimed", res.escape_reclaimed},
                  {"bundle_groups", res.bundle_groups}, {"bundle_spines", res.bundle_spines}, {"bundle_conns", res.bundle_conns}, {"bundle_lanes", res.bundle_lanes}, {"tunnels", res.tunnels}};
   if (!variant_rows.empty()) out.summary["variants"] = std::move(variant_rows);
+  {  // Stage 2B #18: where the job's wall time went, plus the process peak RSS. `other` is the residual
+     // (after-route passes, analyses, report assembly), so the stages always sum to `seconds`.
+    const double other_s = std::max(0.0, job_seconds - (parse_s + search_s + repair_s + refill_s + save_s));
+    out.summary["stages"] = {{"parse", parse_s}, {"search", search_s}, {"repair", repair_s},
+                             {"refill", refill_s}, {"save", save_s},   {"other", other_s}};
+    out.summary["peak_rss_mb"] = peak_rss_mb();
+  }
   // M22 repair steps (D156), only when they ran: a run without them writes the summary it always did.
   for (const auto& [k, v] : {std::pair<const char*, long>{"via_shoves", res.via_shoves}, {"via_shove_trials", res.via_shove_trials}, {"window_escalations", res.window_escalations},
                              {"via_retried", res.via_retried}, {"fanout_holds", res.fanout_holds}, {"fanout_heads", res.fanout_heads}})
