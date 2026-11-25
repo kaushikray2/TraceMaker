@@ -26,6 +26,7 @@ struct RouteJob {
   std::string kb_path;            // knowledge base file; empty = none
   bool seed_given = false;        // --seed was passed explicitly: the run is under the deterministic contract
   bool kb_given = false;          // --kb was passed explicitly: the knowledge base may be used even under --seed
+  bool time_given = false;        // --time was passed explicitly: the wall clock may stop a work-budgeted job (issue #16)
   bool early_stop = false;        // --early-stop: cancel sibling variants once one fully routes, also under --work (issue #20)
   bool no_early_stop = false;     // --no-early-stop: never cancel siblings (measurement runs)
   std::string items_out;          // --emit-items file; empty = none

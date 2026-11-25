@@ -285,12 +285,32 @@ RouteJobResult run_route_job(RouteJob job) {
   if (job.time_total_s < 0) throw std::invalid_argument("--time-total: expected seconds (> 0), or 0 for off");
   if (!(job.rescue_share > 0 && job.rescue_share <= 1)) throw std::invalid_argument("--rescue-share: expected a fraction in (0, 1]");
   if (job.time_total_s > 0) opt.time_limit_s = job.time_total_s * (job.rescue && !opt.relax ? job.rescue_share : 1.0);
+  // Whole-job determinism (issue #16): a work-budgeted job with no explicit --time and no
+  // --time-total must not stop on the wall clock anywhere -- not in the main run and not in
+  // any post-route stage, and every stage derives its time budget from opt.time_limit_s
+  // (the rescue passes inherit it, repair takes it as its attempt gate, the refill and
+  // thermal repairs spend what is left of it). Disarm it once, here: the limit becomes a
+  // sentinel no real run reaches, work decides every stop, and an explicit --time (or
+  // --time-total, above) stays the safety net whose bite still reports time_limited.
+  constexpr double kNoTimeLimit = 1e9;  // seconds; JSON-safe and safe under every share/scale applied to it
+  // What bounds this job: a plain job is bounded by --work (every variant run carries it,
+  // and the rescue passes derive their rounds from it). A --relax job's rounds are NOT
+  // bounded by --work (they run until complete, the round cap or --time); they are bounded
+  // only when a round budget was supplied -- --round-work or --rounds at this level, whose
+  // RouterOptions defaults are 0 (the 20 M / 200 defaults route_portfolio applies to its
+  // own copy do not count: with no round budget supplied, --relax stays time-bounded as
+  // before, issue #21). --round-work alone also bounds a plain job (route_portfolio gives
+  // every variant that work budget).
+  const bool work_bounded = opt.relax ? (opt.round_work > 0 || opt.rounds > 0)
+                                       : (opt.work_budget > 0 || opt.round_work > 0);
+  const bool time_disarmed = work_bounded && !job.time_given && job.time_total_s <= 0;
+  if (time_disarmed) opt.time_limit_s = kNoTimeLimit;
   // The live page (core/live.hpp): what this job is and where it is.
   live::field("board", job.in);
   if (!job.out.empty()) live::field("output", job.out);
   live::field("budget", (opt.work_budget > 0 ? fmt("%ld work, ", opt.work_budget) : std::string()) +
                             (job.time_total_s > 0 ? fmt("--time-total %.0f s (plain run %.0f s), ", job.time_total_s, opt.time_limit_s)
-                                                  : fmt("--time %.0f s, ", opt.time_limit_s)) +
+                                                  : time_disarmed ? std::string("--time off (work decides), ") : fmt("--time %.0f s, ", opt.time_limit_s)) +
                             fmt("%d thread%s", job.threads, job.threads == 1 ? "" : "s") + (opt.relax ? ", relax" : ""));
   if (job.view) live::field("viewer port", std::to_string(job.view_port));
   live::field("stage", "reading the board");
