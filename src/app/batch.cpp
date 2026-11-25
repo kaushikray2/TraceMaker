@@ -172,6 +172,9 @@ std::string apply_option(RouteJob& job, const std::string& key, const json& v, c
   } else if (key == "warm_pcb") {
     if (!get_string()) return bad("a string");
     job.warm_pcb = resolve(base, sv);
+  } else if (key == "no_gpu") {
+    if (!get_bool()) return bad("a boolean");
+    job.opt.gpu_device = bv ? -1 : default_gpu_device(true);
   } else if (key == "heartbeat" || key == "heartbeat_s") {
     return "option '" + key + "': heartbeat is not available in batch mode (the live progress state is process-wide); route the board singly for a heartbeat";
   } else if (key == "threads") {
@@ -263,6 +266,7 @@ int run_batch(const std::string& manifest_path, int threads_override, const std:
     sp.job.out = output;
     sp.job.json_out = jsonp;
     sp.job.external_cap = true;  // the batch owns the process-wide cap (see the scheduler below)
+    sp.job.opt.gpu_device = default_gpu_device(true);  // the route default (GPU unless refused), resolved like a single run; the RouterOptions default of 0 would silently mean device 0 on a GPU build
     if (sp.error.empty())
       for (auto it = global_options.begin(); it != global_options.end() && sp.error.empty(); ++it)
         sp.error = apply_option(sp.job, it.key(), it.value(), base);

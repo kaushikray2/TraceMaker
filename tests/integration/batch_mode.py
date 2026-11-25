@@ -118,6 +118,13 @@ def main():
     p, _ = run(["route-batch", str(mp)])
     check(p.returncode == 2, f"batch4 negative threads: rc {p.returncode} != 2")
 
+    # batch 5: no_gpu is a batch option (the batch resolves the GPU device like a single run)
+    mp = manifest("m7.json", 8, [job("n.kicad_pcb", options={"seed": 42, "work": 300000, "no_gpu": True})])
+    p, _ = run(["route-batch", str(mp), "--json", str(WORK / "batch5.json")])
+    check(p.returncode == 3, f"batch5: rc {p.returncode} != 3")
+    n = json.loads((WORK / "n.json").read_text())
+    check(all(n.get(k) == single.get(k) for k in GATE), "batch5: no_gpu board differs from the single run")
+
     print("PASS batch_mode")
     return 0
 
