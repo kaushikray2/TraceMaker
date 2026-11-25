@@ -36,6 +36,8 @@ struct RouteJob {
   // the rules read and not read, the stuck report and a DRC of the board before and after to the summary, and writes the summary
   // to `json_out`, else beside the report as FILE.json, so every number in the report is a field of a file the reader has.
   std::string report_out;
+  std::string heartbeat_out;  // --heartbeat FILE (Tier 1): a JSON progress file (stage, routed, open, elapsed) rewritten while the job runs
+  double heartbeat_s = 10;    // --heartbeat-s: the rewrite interval, seconds
   nlohmann::json options_given;   // the options as given on the command line and in --config, [{"name", "value"}]; reported only
   bool view = false;              // stream to the browser viewer
   // Reference-return audit of selected nets on the routed board (issue #7, doc 05 §42): off unless a selector is given. Read-only; the

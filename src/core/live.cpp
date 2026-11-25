@@ -295,4 +295,22 @@ void eprintf(const char* fmt, ...) {
   log(line);
 }
 
+Progress progress() {
+  Progress p;
+  if (!enabled()) return p;
+  std::lock_guard lk(g->mu);
+  for (const auto& [k, v] : g->fields)
+    if (k == "stage") p.stage = v;
+  for (const auto& ns : g->slots) {
+    const int r = ns->s.routed.load(std::memory_order_relaxed);
+    if (r > p.routed) {
+      p.routed = r;
+      p.total = ns->s.total.load(std::memory_order_relaxed);
+      p.work = ns->s.work.load(std::memory_order_relaxed);
+      p.budget = ns->s.budget.load(std::memory_order_relaxed);
+    }
+  }
+  return p;
+}
+
 }  // namespace tmk::live

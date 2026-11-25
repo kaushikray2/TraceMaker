@@ -8,6 +8,7 @@
 #include <bit>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdarg>
 #include <cstdio>
 #include <ctime>
@@ -293,6 +294,7 @@ RouteJobResult run_route_job(RouteJob job) {
   auto cap = [&](double s) { return job.time_total_s > 0 ? std::min(s, total_left()) : s; };
   constexpr double kMinStage = 1.0;  // seconds: a stage with less than this left is skipped
   if (job.time_total_s < 0) throw std::invalid_argument("--time-total: expected seconds (> 0), or 0 for off");
+  if (!job.heartbeat_out.empty() && !(job.heartbeat_s > 0)) throw std::invalid_argument("--heartbeat-s: expected seconds (> 0)");
   if (!(job.rescue_share > 0 && job.rescue_share <= 1)) throw std::invalid_argument("--rescue-share: expected a fraction in (0, 1]");
   if (job.time_total_s > 0) opt.time_limit_s = job.time_total_s * (job.rescue && !opt.relax ? job.rescue_share : 1.0);
   // Whole-job determinism (issue #16): a work-budgeted job with no explicit --time and no
@@ -332,6 +334,58 @@ RouteJobResult run_route_job(RouteJob job) {
                             fmt("%d thread%s", job.threads, job.threads == 1 ? "" : "s") + (opt.relax ? ", relax" : ""));
   if (job.view) live::field("viewer port", std::to_string(job.view_port));
   live::field("stage", "reading the board");
+  // Progress heartbeat (Tier 1): a JSON file a backend can poll while the job runs -- the stage, the
+  // furthest-along variant's routed count and the elapsed time, rewritten every --heartbeat-s seconds (temp
+  // file + rename, so a reader never sees half a file). Write-only like the live page: nothing reads it back,
+  // so it cannot change a result. The final state is written once, after the thread stops, at the end of the job.
+  struct Heartbeat {
+    std::string path;
+    std::chrono::steady_clock::time_point t0;
+    std::mutex mu;
+    std::condition_variable cv;
+    bool stop = false;
+    std::thread th;
+    ~Heartbeat() { halt(); }
+    void halt() {
+      {
+        std::lock_guard lk(mu);
+        stop = true;
+      }
+      cv.notify_all();
+      if (th.joinable()) th.join();
+    }
+    void write(const nlohmann::json& j) const {
+      const std::string tmp = path + ".tmp";
+      {
+        std::ofstream f(tmp);
+        f << j.dump(2);
+      }
+      std::error_code ec;
+      std::filesystem::rename(tmp, path, ec);
+    }
+    double elapsed() const { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(); }
+  };
+  Heartbeat hb;
+  if (!job.heartbeat_out.empty()) {
+    hb.path = job.heartbeat_out;
+    hb.t0 = job_t0;
+    hb.th = std::thread([&hb, &job] {
+      std::unique_lock lk(hb.mu);
+      while (!hb.cv.wait_for(lk, std::chrono::duration<double>(job.heartbeat_s), [&hb] { return hb.stop; })) {
+        lk.unlock();
+        const live::Progress p = live::progress();
+        nlohmann::json j{{"board", job.in}, {"elapsed_s", hb.elapsed()}};
+        if (!p.stage.empty()) j["stage"] = p.stage;
+        if (p.total >= 0) {
+          j["routed"] = p.routed;
+          j["connections"] = p.total;
+          j["open"] = p.total - p.routed;
+        }
+        hb.write(j);
+        lk.lock();
+      }
+    });
+  }
   auto lb = io::read_board_file(job.in);
   if (job.reroute) {
     // Strip the unlocked tracks and vias from the document and read it again (the editor changes the document,
@@ -2326,6 +2380,16 @@ RouteJobResult run_route_job(RouteJob job) {
   if (server && job.hold) {
     log("routing finished; viewer still serving at " + server->url() + " (Ctrl-C to quit)");
     for (;;) std::this_thread::sleep_for(std::chrono::seconds(1));
+  }
+  if (!hb.path.empty()) {
+    hb.halt();
+    hb.write({{"board", job.in},
+              {"stage", "done"},
+              {"routed", res.routed},
+              {"connections", res.connections},
+              {"open", res.connections - res.routed},
+              {"elapsed_s", hb.elapsed()},
+              {"done", true}});
   }
   opt.sink = nullptr;
   return out;

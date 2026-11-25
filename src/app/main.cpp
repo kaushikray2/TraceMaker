@@ -1495,6 +1495,10 @@ static int run_main(int argc, char** argv) {
   route->add_option("--view-embed", r_job.view_embed, "Pages that may show the viewer in a frame, origins separated by spaces (e.g. a dashboard: http://host:8771); default: none");
   route->add_flag("--hold", r_job.hold, "Keep serving the viewer after routing finishes");
   route->add_option("--json", r_json, "Write a result summary as JSON");
+  route->add_option("--heartbeat", r_job.heartbeat_out,
+                    "Write a JSON progress file (stage, routed, open, elapsed_s) rewritten every --heartbeat-s seconds while the job "
+                    "runs, and once more with done: true at the end; for backends polling a long job");
+  route->add_option("--heartbeat-s", r_job.heartbeat_s, "Heartbeat interval, seconds (default 10)")->check(CLI::PositiveNumber);
   route->add_option("--report", r_job.report_out,
                     "Write a run report for designers: what was routed, what is open and why, the rules read and not read, the signal-integrity "
                     "audit, the DRC before and after, the options and the seed. HTML, or Markdown if FILE ends in .md. Every number in it is a "
