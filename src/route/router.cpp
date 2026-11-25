@@ -8688,7 +8688,7 @@ PortfolioResult route_portfolio(const model::Board& board, const model::DesignRu
   // ended on work (each round's variants stopped on their round work budget, the default
   // included, or a plain job's --work split across rounds).
   if (pr.best.routed < pr.best.connections) {
-    if (rounds_timed_out) pr.stopped_by = "time";
+    if (timed) pr.stopped_by = "time";  // any variant the clock stopped, not only a between-rounds timeout: a plain --time run has no rounds to time out between
     else if (rounds_given) pr.stopped_by = "rounds";
     else pr.stopped_by = "work";
   }
