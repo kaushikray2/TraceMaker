@@ -295,6 +295,8 @@ RouteJobResult run_route_job(RouteJob job) {
   constexpr double kMinStage = 1.0;  // seconds: a stage with less than this left is skipped
   if (job.time_total_s < 0) throw std::invalid_argument("--time-total: expected seconds (> 0), or 0 for off");
   if (!job.heartbeat_out.empty() && !(job.heartbeat_s > 0)) throw std::invalid_argument("--heartbeat-s: expected seconds (> 0)");
+  if (job.route_open_only && job.repair == "off")
+    throw std::invalid_argument("--route-open-only is the repair-driven finisher: it cannot combine with --repair off");
   if (!(job.rescue_share > 0 && job.rescue_share <= 1)) throw std::invalid_argument("--rescue-share: expected a fraction in (0, 1]");
   if (job.time_total_s > 0) opt.time_limit_s = job.time_total_s * (job.rescue && !opt.relax ? job.rescue_share : 1.0);
   // Whole-job determinism (issue #16): a work-budgeted job with no explicit --time and no
@@ -992,6 +994,8 @@ RouteJobResult run_route_job(RouteJob job) {
   bool input_copper = false;  // the board came with unlocked tracks or vias (--repair auto)
   for (const auto& t : lb.board.tracks) input_copper = input_copper || !t.locked;
   for (const auto& v : lb.board.vias) input_copper = input_copper || !v.locked;
+  if (job.route_open_only && !input_copper)
+    log("route-open-only: the board has no routed copper: this run is a plain route, and the repair stage runs on its result");
   auto& res = out.result;
   // The after-route stages below may not undo the router's tuning (D173, issue #60): a stage's copper is kept only if no net is
   // further outside a `length` or `skew` rule with it than without it, measured as the DRC measures the written board.
@@ -1369,14 +1373,25 @@ RouteJobResult run_route_job(RouteJob job) {
   nlohmann::json removed_items;                      // the input's tracks and vias the repair lifted, in the --emit-items layout
   route::RouteResult gone_input;                     // the same copper as items
   int islands_cut = 0;                               // groups of copper that joined no pad after the run, taken off (D198)
-  if (job.repair != "off" && (job.repair == "on" || input_copper) && res.routed < res.connections && job.time_total_s > 0 && total_left() < kMinStage) {
+  if (job.repair != "off" && (job.repair == "on" || job.route_open_only || input_copper) && res.routed < res.connections && job.time_total_s > 0 && total_left() < kMinStage) {
     stage_time_limited = true;  // skipped on the wall clock, like every other stage's --time-total skip
     log(fmt("repair: skipped, --time-total (%.0f s) is used up", job.time_total_s));
   }
-  else if (job.repair != "off" && (job.repair == "on" || input_copper) && res.routed < res.connections) {
+  else if (job.repair != "off" && (job.repair == "on" || job.route_open_only || input_copper) && res.routed < res.connections) {
     live::field("stage", "repair windows");
     if (opt.sink) opt.sink->publish(server::stage("repair", "begin", fmt("%d connections open", res.connections - res.routed)));
     passes::RepairOptions ro = job.repair_opt;
+    if (job.route_open_only) {
+      // The finisher's configuration (Tier 1): an attempt routes only the open connection and the nets whose
+      // copper it lifted (focus), over every open connection, with a per-connection budget -- the job's
+      // --work when given, else four times the repair default when the attempt budget was not set either --
+      // and portfolio attempts when the job runs variants.
+      ro.focus = true;
+      if (opt.work_budget > 0) ro.step_work = std::max(ro.step_work, opt.work_budget);
+      else if (ro.step_work == passes::RepairOptions{}.step_work) ro.step_work *= 4;
+      ro.max_conns = std::max(ro.max_conns, res.connections - res.routed);
+      if (variants > 1) ro.variants = std::max(ro.variants, variants);
+    }
     for (const auto& [a, b2] : opt.pair_nets) ro.keep_nets.push_back(a), ro.keep_nets.push_back(b2);
     if (opt.diff_pairs) {
       const drc::RuleEngine re(*route_board, rules);
@@ -2332,6 +2347,10 @@ RouteJobResult run_route_job(RouteJob job) {
     }
     out.summary["open_connections"] = std::move(open);
     out.summary["exit_code"] = out.exit_code();
+    if (job.route_open_only) {
+      out.summary["route_open_only"] = true;
+      out.summary["open_at_start"] = res.connections;  // the input's ratsnest: connections is a property of the board as read, unchanged by the stages
+    }
   }
   out.summary["completion_pct"] = res.connections > 0 ? std::round(10000.0 * res.routed / res.connections) / 100.0 : 100.0;
   {

@@ -1346,6 +1346,11 @@ static int run_main(int argc, char** argv) {
                     "failure) and routed again; an attempt is kept only if no joined pads come apart and fewer connections are open. auto (default): "
                     "only on a board that came with unlocked tracks or vias; on: also on a board routed from nothing; off (doc 05 §75)")
       ->check(CLI::IsMember({"auto", "on", "off"}));
+  route->add_flag("--route-open-only", r_job.route_open_only,
+                  "Finisher mode for a partially routed board: the routed copper stays fixed and the connections still open are attacked "
+                  "with the repair windows in focused form -- each attempt routes only the open connection and the nets whose copper it "
+                  "lifted, with a per-connection budget (the job's --work, or four times the repair default) and portfolio attempts when "
+                  "the job runs variants. The route JSON reports route_open_only and open_at_start");
   route->add_option("--repair-window-mm", r_job.repair_opt.radii_mm, "Repair: window radii round each end of an open connection, tried in turn (default 1,2,4)")
       ->delimiter(',')->allow_extra_args(false);
   route->add_option("--repair-work", r_job.repair_opt.step_work, "Repair: work budget of each attempt in search expansions (default 3000000)");

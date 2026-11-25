@@ -90,6 +90,7 @@ struct RouteJob {
   // board, whose copper the plain run cannot move); "on": also on a board routed from nothing here; "off".
   std::string repair = "auto";
   passes::RepairOptions repair_opt;
+  bool route_open_only = false;  // --route-open-only (Tier 1): finisher mode for a partially routed board -- routed copper stays fixed, the repair windows attack the open connections in focused form with a per-connection budget
   // Copper that joins no pad after the run, and is the run's doing, is taken off (passes::padless_islands, D198). true keeps it.
   bool keep_islands = false;
   // --only-net / --skip-net patterns (KiCad wildcards or regular expressions, as net-class patterns): only_nets keeps the nets that
