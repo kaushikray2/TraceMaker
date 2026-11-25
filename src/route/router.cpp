@@ -2317,9 +2317,9 @@ struct Router::Impl {
       std::uint64_t last_fu = 0, last_key = 0;  // extraction watermark; every bucketed entry is >= it
       int bucket_of(std::uint64_t fu, std::uint64_t key) const {
         const std::uint64_t df = fu ^ last_fu;
-        if (df) return 65 + (63 - __builtin_clzll(df));
+        if (df) return 65 + (63 - std::countl_zero(df));
         const std::uint64_t dk = key ^ last_key;
-        if (dk) return 1 + (63 - __builtin_clzll(dk));
+        if (dk) return 1 + (63 - std::countl_zero(dk));
         return 0;
       }
       std::vector<QE> buckets[129];
