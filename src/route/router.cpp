@@ -2294,13 +2294,95 @@ struct Router::Impl {
     auto sidx = [&](int l, std::int64_t ci, int dir) {
       return ((static_cast<std::size_t>(l) * cells + static_cast<std::size_t>(ci)) * D) + (D == 9 ? static_cast<std::size_t>(dir) : 0);
     };
-    // Open list: a min-heap of (f, key). The key is the state index; with tie_deep, ties on f go first to the larger g, in
-    // units of 256 (saturating at 2^32), then to the lower state index (states < 2^31: parents are int32). Its container is
-    // reachable so a field built during the search can re-key it (a priority_queue of pairs is faster here than a vector
-    // with a heap of structs: 4-8 % of the run on sbc and logicbone).
+    // Open list: entries pop in the total order (f, key). The key is the state index; with tie_deep, ties on f go first
+    // to the larger g, in units of 256 (saturating at 2^32), then to the lower state index (states < 2^31: parents are
+    // int32). Stage 2B: a radix heap over the (f, key) composite key replaces the binary heap
+    // (measured ~2x per op at the 65k-entry average frontier of a large search; heap ops were ~10 % of search time).
+    // Extraction follows the same total order, so trajectories are unchanged. A* extraction is monotone except that
+    // the weighted heuristic can generate a child whose f dips below the last extracted f; those rare inserts take a
+    // binary-heap sidecar and pop merges the two minima, so the order is exact in all cases. A field built during the
+    // search re-keys the whole list through drain()/refill().
     using QE = std::pair<std::int64_t, std::uint64_t>;
-    struct OpenList : std::priority_queue<QE, std::vector<QE>, std::greater<>> {
-      using std::priority_queue<QE, std::vector<QE>, std::greater<>>::c;
+    struct OpenList {
+      // The composite key is (f, key) with f sign-flipped into unsigned order; it is handled as a pair of
+      // uint64 halves throughout (no __int128: -Wpedantic rejects it, and the pair form is portable).
+      static std::uint64_t fu_of(const QE& e) { return static_cast<std::uint64_t>(e.first) ^ (std::uint64_t{1} << 63); }
+      static bool less(const QE& a, const QE& b) {  // the total order, on transformed f
+        const std::uint64_t fa = fu_of(a), fb = fu_of(b);
+        return fa != fb ? fa < fb : a.second < b.second;
+      }
+      std::uint64_t last_fu = 0, last_key = 0;  // extraction watermark; every bucketed entry is >= it
+      int bucket_of(std::uint64_t fu, std::uint64_t key) const {
+        const std::uint64_t df = fu ^ last_fu;
+        if (df) return 65 + (63 - __builtin_clzll(df));
+        const std::uint64_t dk = key ^ last_key;
+        if (dk) return 1 + (63 - __builtin_clzll(dk));
+        return 0;
+      }
+      std::vector<QE> buckets[129];
+      std::size_t sz = 0;
+      std::priority_queue<QE, std::vector<QE>, std::greater<>> overflow;  // inserts below the watermark
+      void emplace(std::int64_t f, std::uint64_t key) {
+        const QE e{f, key};
+        const std::uint64_t fu = fu_of(e);
+        if (fu < last_fu || (fu == last_fu && key < last_key)) {
+          overflow.push(e);
+          return;
+        }
+        buckets[bucket_of(fu, key)].push_back(e);
+        ++sz;
+      }
+      bool empty() const { return sz == 0 && overflow.empty(); }
+      std::size_t size() const { return sz + overflow.size(); }
+      bool radix_min(QE& out) {  // leaves the minimum in bucket 0 (redistributing one bucket) and returns it
+        if (sz == 0) return false;
+        if (buckets[0].empty()) {
+          int i = 1;
+          while (buckets[i].empty()) ++i;
+          auto& b = buckets[i];
+          QE mn = b[0];
+          for (const auto& e : b)
+            if (less(e, mn)) mn = e;
+          last_fu = fu_of(mn);
+          last_key = mn.second;
+          for (const auto& e : b) buckets[bucket_of(fu_of(e), e.second)].push_back(e);
+          b.clear();
+        }
+        out = buckets[0].back();
+        return true;
+      }
+      QE top() {
+        QE rp{};
+        const bool hr = radix_min(rp);
+        if (!overflow.empty() && (!hr || less(overflow.top(), rp))) return overflow.top();
+        return rp;
+      }
+      void pop() {
+        QE rp{};
+        const bool hr = radix_min(rp);
+        if (!overflow.empty() && (!hr || less(overflow.top(), rp))) {
+          overflow.pop();
+          return;
+        }
+        buckets[0].pop_back();
+        --sz;
+      }
+      void drain(std::vector<QE>& out) {  // every entry, unordered; resets the watermark for refill()
+        for (auto& b : buckets) {
+          for (const auto& e : b) out.push_back(e);
+          b.clear();
+        }
+        sz = 0;
+        while (!overflow.empty()) {
+          out.push_back(overflow.top());
+          overflow.pop();
+        }
+        last_fu = 0;
+        last_key = 0;
+      }
+      void refill(const std::vector<QE>& in) {
+        for (const auto& e : in) emplace(e.first, e.second);
+      }
     } open;
     const bool tie_deep = opt.tie_deep;
     auto qkey = [&](std::int64_t g, std::size_t st) -> std::uint64_t {
@@ -2404,7 +2486,10 @@ struct Router::Impl {
           if (e.first - h(static_cast<int>(elc / cells), w.x0 + static_cast<int>(ci2 % w.w), w.y0 + static_cast<int>(ci2 / w.w)) <= sn[es].g) kept.push_back(e);
         };
         keep(QE{f, qkey(sn[s].g, s)});  // the state being expanded goes back too: the new key may put another state first
-        for (const auto& e : open.c) keep(e);
+        std::vector<QE> all;
+        all.reserve(open.size());
+        open.drain(all);
+        for (const auto& e : all) keep(e);
         make_field();
         ++field_late;
         for (auto& e : kept) {
@@ -2412,8 +2497,7 @@ struct Router::Impl {
           const std::int64_t ci2 = static_cast<std::int64_t>(elc % cells);
           e.first = sn[es].g + h(static_cast<int>(elc / cells), w.x0 + static_cast<int>(ci2 % w.w), w.y0 + static_cast<int>(ci2 / w.w));
         }
-        open.c = std::move(kept);
-        std::make_heap(open.c.begin(), open.c.end(), std::greater<>{});
+        open.refill(kept);
         --expanded;  // the state was not expanded
         continue;
       }

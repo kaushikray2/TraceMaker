@@ -99,6 +99,23 @@ byte-identical to the --no-early-stop run (same winner); forced
 --work --early-stop: fired, saved_work 16.8M of 20M, deterministic
 false, time_limited false.
 
+### Stage 2B step 6 — radix heap for the search open list (2026-11-24)
+The A* open list pops in a total order, (f, tie-key), so a radix heap
+over the composite key reproduces the binary heap's extraction order
+exactly: expansions and output boards are unchanged, verified
+byte-identical on the profiled oskirby arm (3,227,600 expansions)
+and the full ladder arms (oskirby 22,432,211 expansions, 1051/1188;
+mini_mass x2 22,223,805, 987/995). Sizing came first (perf is
+unavailable on the build host): an instrumented count showed
+18.9M pushes / 12.2M pops at a 65k average frontier in that arm
+(~10 % of search time in heap ops), and a microbenchmark put the
+radix heap at ~64 ns/op against ~129 for the binary heap. In-job:
+mini_mass x2 wall 4:16.70 -> 4:06.15, peak RSS 5.87 -> 5.29 GB.
+The weighted heuristic can generate a child below the extraction
+watermark; those rare inserts take a binary-heap sidecar and pops
+merge the two minima, so the order is exact in all cases. The
+field re-key path drains and refills the list. ctest 495/495.
+
 ## In progress
 
 Nothing in flight at this commit; the next items are the data-structure changes (see Remaining).
@@ -106,8 +123,7 @@ Nothing in flight at this commit; the next items are the data-structure changes 
 ## Remaining (in sequence)
 
 ### Stage 2B — CPU performance (rest)
-- Radix heap for the open list; flat open-addressing hash maps; spatial
-  keepouts / UniformGrid.
+- Flat open-addressing hash maps; spatial keepouts / UniformGrid.
 - field_cpu: change-tracking init, parallel layer sweeps, shared
   ClassCache pages (the mini_mass 8-variant RSS remainder).
 - Bench: drc_judge.py KiCad DRC error-cap fix; causes wired into
