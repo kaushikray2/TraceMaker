@@ -1499,6 +1499,8 @@ static int run_main(int argc, char** argv) {
                     "Write a JSON progress file (stage, routed, open, elapsed_s) rewritten every --heartbeat-s seconds while the job "
                     "runs, and once more with done: true at the end; for backends polling a long job");
   route->add_option("--heartbeat-s", r_job.heartbeat_s, "Heartbeat interval, seconds (default 10)")->check(CLI::PositiveNumber);
+  route->footer("Exit codes: 0 = every connection routed; 3 = the job ran but connections remain open (see open_connections in the "
+                "route JSON); 1 = the job failed to run (unreadable board, refused configuration); 2 = usage error.");
   route->add_option("--report", r_job.report_out,
                     "Write a run report for designers: what was routed, what is open and why, the rules read and not read, the signal-integrity "
                     "audit, the DRC before and after, the options and the seed. HTML, or Markdown if FILE ends in .md. Every number in it is a "
@@ -1783,7 +1785,16 @@ static int run_main(int argc, char** argv) {
   bool t_jobs = false;
   tui->add_flag("--jobs", t_jobs, "Open on the jobs screen: this user's route runs, what each has left, its options and what to change on a rerun");
 
-  CLI11_PARSE(app, argc, argv);
+  // The documented exit-code matrix (see route --help): 0 = done / every connection routed, 1 = the job
+  // failed to run, 2 = usage error, 3 = connections remain open. CLI11's own parse-error codes are an
+  // undocumented family (105, 106, ...), so they are normalized here: app.exit still prints the error,
+  // only the returned code is mapped.
+  try {
+    app.parse(argc, argv);
+  } catch (const CLI::ParseError& e) {
+    const int rc = app.exit(e);
+    return rc == 0 ? 0 : 2;
+  }
   if (*tui) {
     // The screen ends in a `route` run, a printed command or nothing. A run goes through the parser again, exactly
     // as if the user had typed the command.
@@ -1795,7 +1806,8 @@ static int run_main(int argc, char** argv) {
       app.clear();
       app.parse(next);
     } catch (const CLI::ParseError& e) {
-      return app.exit(e);
+      const int rc = app.exit(e);
+      return rc == 0 ? 0 : 2;  // usage error, as at the main parse (CLI11's own codes are not the contract)
     } catch (const std::exception& e) {
       std::fprintf(stderr, "error: %s\n", e.what());
       return 1;
@@ -1811,7 +1823,8 @@ static int run_main(int argc, char** argv) {
       app.clear();
       app.parse(all);
     } catch (const CLI::ParseError& e) {
-      return app.exit(e);
+      const int rc = app.exit(e);
+      return rc == 0 ? 0 : 2;  // usage error, as at the main parse (CLI11's own codes are not the contract)
     } catch (const std::exception& e) {
       std::fprintf(stderr, "error: %s\n", e.what());
       return 1;

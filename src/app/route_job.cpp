@@ -2315,6 +2315,24 @@ RouteJobResult run_route_job(RouteJob job) {
     log(fmt("note: the obstacle caches reached --class-cache-mb (%.0f MB) and were freed %ld times; a larger bound saves time (and may change the result)",
             opt.class_cache_mb, res.cache_evictions));
   out.summary["open"] = res.connections - res.routed;
+  {
+    // Structured failures (Tier 1): every open connection as an object -- the net, the REF.PIN pair as
+    // fields and the router's stable reason code (RouteResult::Unrouted::reason, router.hpp) -- beside the
+    // human-readable failures strings, which stay for the log and the report. exit_code is the route
+    // command's process code for this job (0/3), for consumers that read only the file.
+    nlohmann::json open = nlohmann::json::array();
+    for (const auto& u : res.unrouted) {
+      auto end = [&](int pad) {
+        const auto& pd = lb.board.pads[static_cast<std::size_t>(pad)];
+        return nlohmann::json{{"part", lb.board.footprints[static_cast<std::size_t>(pd.footprint)].reference}, {"pad", pd.number}};
+      };
+      nlohmann::json e{{"net", u.net}, {"reason", u.reason}, {"from", end(u.pad_a)}};
+      e["to"] = u.pad_b < 0 ? nlohmann::json{{"zone", true}} : end(u.pad_b);
+      open.push_back(std::move(e));
+    }
+    out.summary["open_connections"] = std::move(open);
+    out.summary["exit_code"] = out.exit_code();
+  }
   out.summary["completion_pct"] = res.connections > 0 ? std::round(10000.0 * res.routed / res.connections) / 100.0 : 100.0;
   {
     std::time_t now = std::time(nullptr);
@@ -2597,6 +2615,8 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
         best->summary["routed"] = conns - open;
         if (conns > 0) best->summary["completion_pct"] = 100.0 * (conns - open) / conns;
         best->summary.erase("failures");
+        best->summary.erase("open_connections");  // chains moved copper without a route: the previous rung's per-connection detail is stale too
+        best->summary["exit_code"] = open == 0 ? 0 : 3;
         fs::copy_file(best_tmp, final_out, fs::copy_options::overwrite_existing);
         copy_project_files(job.in, final_out);
       } else {

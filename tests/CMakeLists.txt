@@ -60,6 +60,8 @@ add_test(NAME seed_determinism COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integ
 set_tests_properties(seed_determinism PROPERTIES SKIP_RETURN_CODE 77 LABELS "route;integration" TIMEOUT 1800 PROCESSORS 8)
 add_test(NAME deterministic_mode COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration/deterministic_mode.py $<TARGET_FILE:tracemaker> ${CMAKE_BINARY_DIR}/integration/deterministic_mode)
 add_test(NAME heartbeat COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration/heartbeat.py $<TARGET_FILE:tracemaker> ${CMAKE_BINARY_DIR}/integration/heartbeat)
+add_test(NAME exit_codes COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration/exit_codes.py $<TARGET_FILE:tracemaker> ${CMAKE_BINARY_DIR}/integration/exit_codes)
+set_tests_properties(exit_codes PROPERTIES SKIP_RETURN_CODE 77 LABELS "route;integration" TIMEOUT 900 PROCESSORS 4)
 set_tests_properties(heartbeat PROPERTIES SKIP_RETURN_CODE 77 LABELS "route;integration" TIMEOUT 900 PROCESSORS 2)
 set_tests_properties(deterministic_mode PROPERTIES SKIP_RETURN_CODE 77 LABELS "route;integration" TIMEOUT 1800 PROCESSORS 8)
 # Coupled differential pairs (M12, D50): a USB hub's five pairs routed coupled, deterministic, KiCad-clean.
