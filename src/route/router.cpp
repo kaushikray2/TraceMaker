@@ -33,6 +33,7 @@
 #include "core/live.hpp"
 #include "core/rng.hpp"
 #include "core/parallel.hpp"
+#include "core/flat_map.hpp"
 #include "drc/connectivity.hpp"
 #include "gpu/device.hpp"
 #include "gpu/field.hpp"
@@ -438,7 +439,7 @@ struct Router::Impl {
     return n >= 0 && static_cast<std::size_t>(n) < crit_rank.size() && crit_rank[static_cast<std::size_t>(n)] > 0 ? crit_rank[static_cast<std::size_t>(n)] : 1000;
   }
   double via_mult_of(NetId n) const { return n >= 0 && static_cast<std::size_t>(n) < net_via_mult.size() ? net_via_mult[static_cast<std::size_t>(n)] : 1.0; }
-  std::unordered_map<std::int64_t, std::uint16_t> history;  // contested lattice cells (PathFinder history cost)
+  core::FlatU64U16 history;  // contested lattice cells (PathFinder history cost); flat map: ~1e8 finds per large job
   std::vector<int> init_root;        // copper item -> initial cluster root (fixed copper)
   // With soft zones: routed copper item -> initial clusters of the same-net plane fills it touches, so a via that
   // passes through several planes of its net joins all of them (`joined`). Teardrops are no planes.
@@ -1155,8 +1156,8 @@ struct Router::Impl {
   }
   std::int64_t hist_cost(int layer, int gx, int gy) const {
     if (history.empty()) return 0;
-    const auto it = history.find(cell_key(layer, gx, gy));
-    return it == history.end() ? 0 : static_cast<std::int64_t>(static_cast<double>(it->second) * static_cast<double>(pitch) * opt.history_weight);
+    const std::uint16_t* hv = history.find(static_cast<std::uint64_t>(cell_key(layer, gx, gy)));
+    return hv == nullptr ? 0 : static_cast<std::int64_t>(static_cast<double>(*hv) * static_cast<double>(pitch) * opt.history_weight);
   }
   // Consecutive per-cell lookups usually use the same net and width.
   NetId cc_net = -1;
@@ -2971,7 +2972,7 @@ struct Router::Impl {
       const Point q{s.a.x + (s.b.x - s.a.x) * k / n, s.a.y + (s.b.y - s.a.y) * k / n};
       std::vector<int> owners;
       if (obs->disk_state(q, s.layer, track_width(net) / 2, net, 0, true, &owners) == 1) {
-        auto& h = history[cell_key(s.layer, to_ix(q.x), to_iy(q.y))];
+        auto& h = history[static_cast<std::uint64_t>(cell_key(s.layer, to_ix(q.x), to_iy(q.y)))];
         if (h < 60000) h = static_cast<std::uint16_t>(h + 1);
       }
     }
@@ -3808,7 +3809,10 @@ struct Router::Impl {
     emit(heat_exp.message("expansions", -1));
     heat_hist.clear();
     // Iterating the hash map is fine here: raise() keeps the maximum per cell, which does not depend on order.
-    for (const auto& [key, hv] : history) {
+    for (std::size_t hi = 0; hi < history.slot_count(); ++hi) {
+      if (!history.slot_used(hi)) continue;
+      const std::uint64_t key = history.key_at(hi);
+      const std::uint16_t hv = history.value_at(hi);
       const int gx = static_cast<int>(key & 0xFFFFFF), gy = static_cast<int>((key >> 24) & 0xFFFFFF);
       if (gx < nx && gy < ny) heat_hist.raise(at(gx, gy), hv);
     }
@@ -7502,9 +7506,15 @@ struct Router::Impl {
       if (restart > opt.max_restarts) {
         nogoods.clear();
         rip_cap += 2;
-        for (auto it = history.begin(); it != history.end();) {
-          it->second = static_cast<std::uint16_t>(it->second / 2);
-          it = it->second == 0 ? history.erase(it) : std::next(it);
+        for (std::size_t hi = 0; hi < history.slot_count();) {
+          if (!history.slot_used(hi)) {
+            ++hi;
+            continue;
+          }
+          std::uint16_t& hv = history.value_at(hi);
+          hv = static_cast<std::uint16_t>(hv / 2);
+          if (hv == 0) history.erase_at(hi);  // the entry shifted into this slot is unvisited: re-examine the slot
+          else ++hi;
         }
         const RngStream rr(opt.seed, 0x5E57u, static_cast<std::uint64_t>(restart));
         std::vector<double> tie(cs.size());
