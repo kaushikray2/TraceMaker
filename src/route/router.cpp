@@ -166,6 +166,7 @@ struct Router::Impl {
     // Tile geometry and the current search's window (paged only), set by prepare().
     int tiles_x = 0, tiles_y = 0;
     std::size_t cap = 0;        // records per block: kTileCells * layers * dirs
+    std::size_t per_cell = 0;   // records per cell inside a block: layers * dirs (cap / kTileCells), precomputed for locate()
     std::size_t dirs = 1;       // direction states per layer-cell (1 or 9)
     std::size_t cells = 0;      // the window's cells (the flat index divides by it)
     int win_w = 0;              // the window's width in cells
@@ -182,6 +183,7 @@ struct Router::Impl {
         return;
       }
       budget = budget_bytes;
+      per_cell = static_cast<std::size_t>(layers) * d;
       const int ntx = (board_nx + (1 << kTileShift) - 1) >> kTileShift;
       const int nty = (board_ny + (1 << kTileShift) - 1) >> kTileShift;
       const std::size_t ncap = kTileCells * static_cast<std::size_t>(layers) * d;
@@ -237,7 +239,11 @@ struct Router::Impl {
       const std::size_t bx = static_cast<std::size_t>(win_x0) + cx;
       const std::size_t by = static_cast<std::size_t>(win_y0) + cy;
       blk = (by >> kTileShift) * static_cast<std::size_t>(tiles_x) + (bx >> kTileShift);
-      off = (((cy & ((1 << kTileShift) - 1)) << kTileShift) + (cx & ((1 << kTileShift) - 1))) * (cap / kTileCells) +
+      // The within-tile offset uses the BOARD coordinates (bx, by), like CompanionStore's: the
+      // window-local (cx, cy) used before permuted each tile's slots whenever the window origin
+      // was not tile-aligned -- injective, so no search ever read another cell's record, but the
+      // permutation scattered a tile's rows and disagreed with the companion stores' layout.
+      off = (((by & ((1 << kTileShift) - 1)) << kTileShift) + (bx & ((1 << kTileShift) - 1))) * per_cell +
             layer * dirs + dir;
     }
     SNode& operator[](std::size_t i) {
