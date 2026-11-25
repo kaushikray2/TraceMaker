@@ -22,6 +22,10 @@ inline std::atomic<int>& primary_slot() {
   static std::atomic<int> v{0};
   return v;
 }
+inline std::atomic<int>& secondary_slot() {
+  static std::atomic<int> v{0};
+  return v;
+}
 
 inline void set_cap(int n) { cap_slot().store(std::max(0, n)); }
 inline int cap() { return cap_slot().load(); }
@@ -34,6 +38,41 @@ inline int secondary_allowance() {
   if (c <= 0) return INT_MAX;
   return std::max(0, c - primary_active());
 }
+
+// RAII claim of secondary worker slots under the cap. secondary_allowance() alone is a
+// read, not a reservation: concurrent secondary stages (zone refill runs inside every
+// portfolio variant's setup when the board has unfilled zones) would each spend the
+// same headroom and oversubscribe the cap. A claim atomically takes as many of `want`
+// as the cap leaves free after the live primary workers and other live claims, and
+// releases them on scope exit. With no cap set, count() is -1: unbounded, the
+// historical behaviour.
+struct SecondaryScope {
+  explicit SecondaryScope(int want) : n_(0) {
+    if (cap() <= 0) {
+      n_ = -1;
+      return;
+    }
+    int cur = secondary_slot().load();
+    for (;;) {
+      const int avail = cap() - primary_active() - cur;
+      const int claim = std::min(want, std::max(0, avail));
+      if (claim <= 0) return;
+      if (secondary_slot().compare_exchange_weak(cur, cur + claim)) {
+        n_ = claim;
+        return;
+      }
+    }
+  }
+  ~SecondaryScope() {
+    if (n_ > 0) secondary_slot().fetch_sub(n_);
+  }
+  SecondaryScope(const SecondaryScope&) = delete;
+  SecondaryScope& operator=(const SecondaryScope&) = delete;
+  int count() const { return n_; }
+
+ private:
+  int n_;
+};
 
 // RAII registration of a primary pool's workers, for the scope of a parallel run.
 struct PrimaryScope {
