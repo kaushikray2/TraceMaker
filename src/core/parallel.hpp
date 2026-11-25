@@ -28,6 +28,19 @@ inline std::atomic<int>& secondary_slot() {
 }
 
 inline void set_cap(int n) { cap_slot().store(std::max(0, n)); }
+
+// RAII save/restore of the cap for one job's scope: the previous value (0 = no cap)
+// is restored on exit, so a process that runs more than one job -- the test binary,
+// batch mode, nested wrapper jobs -- never leaks one job's cap into the next.
+struct CapScope {
+  explicit CapScope(int n) : prev_(cap_slot().load()) { set_cap(n); }
+  ~CapScope() { set_cap(prev_); }
+  CapScope(const CapScope&) = delete;
+  CapScope& operator=(const CapScope&) = delete;
+
+ private:
+  int prev_;
+};
 inline int cap() { return cap_slot().load(); }
 inline int primary_active() { return primary_slot().load(); }
 
