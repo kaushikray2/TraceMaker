@@ -131,6 +131,11 @@ def main():
     n = json.loads((WORK / "n.json").read_text())
     check(all(n.get(k) == single.get(k) for k in GATE), "batch5: no_gpu board differs from the single run")
 
+    # batch 7: a negative --threads override is a usage error even when the manifest sets threads
+    mp = manifest("m8.json", 8, [job("y.kicad_pcb", **opts)])
+    p, _ = run(["route-batch", str(mp), "--threads=-2"])
+    check(p.returncode == 2, f"batch7: rc {p.returncode} != 2")
+
     print("PASS batch_mode")
     return 0
 

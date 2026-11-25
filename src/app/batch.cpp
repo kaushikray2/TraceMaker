@@ -102,8 +102,8 @@ std::string apply_option(RouteJob& job, const std::string& key, const json& v, c
     if (v.is_number_unsigned()) {
       job.opt.seed = v.get<std::uint64_t>();
     } else if (v.is_number_integer()) {
-      if (v.get<long>() < 0) return bad("a non-negative integer");
-      job.opt.seed = static_cast<std::uint64_t>(v.get<long>());
+      if (v.get<std::int64_t>() < 0) return bad("a non-negative integer");  // int64_t, not long: a 32-bit long (Windows) would truncate the range check
+      job.opt.seed = static_cast<std::uint64_t>(v.get<std::int64_t>());
     } else {
       return bad("an integer");
     }
@@ -205,6 +205,10 @@ int run_batch(const std::string& manifest_path, int threads_override, const std:
       log("route-batch: unknown manifest key '" + it.key() + "' (keys: jobs, threads, options)");
       return 2;
     }
+  if (threads_override < 0) {
+    log("route-batch: --threads must not be negative");
+    return 2;
+  }
   int threads = threads_override;
   if (threads <= 0 && m.contains("threads")) {
     if (!m["threads"].is_number_integer()) {
