@@ -486,6 +486,10 @@ struct PortfolioResult {
   int cancelled = 0;    // variants the deadline cut short in the deciding round
   double saved_s = 0;   // wall-budget seconds the cancelled variants did not spend (wall-clock runs)
   long saved_work = 0;  // work units the cancelled variants did not spend (work-budget runs)
+  // Rounds budget report (issue #21): when the rounds path ended without completing the board,
+  // what stopped it -- "rounds" (the --rounds cap), "work" (the round work budget) or "time"
+  // (the wall clock). Empty when the board completed or no rounds ran.
+  std::string stopped_by;
   // Clearance ramp (relax): per relaxed stage that ran, how much the clearance was lowered and the most connections a round of it
   // routed (under the lowered clearance, so not legal yet).
   std::vector<std::pair<Coord, int>> ramp_stages;

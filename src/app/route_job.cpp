@@ -268,6 +268,7 @@ RouteJobResult run_route_job(RouteJob job) {
   double parse_s = 0, search_s = 0, repair_s = 0, refill_s = 0, save_s = 0;
   parallel::set_cap(std::max(1, job.threads));  // Stage 2B #19: this job threads value is the process-wide worker cap
   bool stopped_early = false;  // issue #20: aggregated over the main run and every challenger below
+  std::string stopped_by;      // issue #21: what stopped the rounds stage of the run whose result stands
   int es_cancelled = 0;
   double es_saved_s = 0;
   long es_saved_work = 0;
@@ -988,6 +989,7 @@ RouteJobResult run_route_job(RouteJob job) {
     int cancelled = 0;
     double saved_s = 0;
     long saved_work = 0;
+    std::string stopped_by;  // what stopped this run's rounds stage: rounds | work | time (issue #21)
     std::vector<std::pair<Coord, int>> ramp_stages;  // relaxed stages of the run: clearance lowered by, best count routed
     int unadvised_best = -1, advised_best = -1;  // routed counts of the best variant of each kind (-1: none ran)
   };
@@ -1033,6 +1035,7 @@ RouteJobResult run_route_job(RouteJob job) {
       r.cancelled = pr.cancelled;
       r.saved_s = pr.saved_s;
       r.saved_work = pr.saved_work;
+      r.stopped_by = pr.stopped_by;
       r.ramp_stages = pr.ramp_stages;
       for (const auto& w : pr.work)
         for (int p = 0; p < route::kWorkPhases; ++p) r.work.phase[static_cast<std::size_t>(p)] += w.phase[static_cast<std::size_t>(p)];
@@ -1050,6 +1053,7 @@ RouteJobResult run_route_job(RouteJob job) {
     es_cancelled = first.cancelled;
     es_saved_s = first.saved_s;
     es_saved_work = first.saved_work;
+    stopped_by = first.stopped_by;
     res = std::move(first.res);
     ran = std::move(first.ran);
     best_index = first.best_index;
@@ -1139,6 +1143,7 @@ RouteJobResult run_route_job(RouteJob job) {
       }
       if (better) {
         best_from_rescue = true;
+        stopped_by = next.stopped_by;
         res = std::move(next.res);
         ran = std::move(next.ran);
         best_index = next.best_index;
@@ -1261,6 +1266,7 @@ RouteJobResult run_route_job(RouteJob job) {
       previous["routed_after"] = next.res.routed;
       previous["routed_before"] = res.routed;
       if (adopt) {
+        stopped_by = next.stopped_by;
         res = std::move(next.res);
         ran = std::move(next.ran);
         best_index = next.best_index;
@@ -2111,6 +2117,7 @@ RouteJobResult run_route_job(RouteJob job) {
     out.summary["peak_rss_mb"] = peak_rss_mb();
     out.summary["threads_effective"] = threads;  // Stage 2B #19: the worker cap in force for this job
     out.summary["stopped_early"] = stopped_early;  // issue #20: a sibling completed and cancelled the rest
+    if (!stopped_by.empty()) out.summary["stopped_by"] = stopped_by;  // issue #21: what stopped the relax/rounds stage (rounds | work | time)
     if (stopped_early) {
       out.summary["early_stop_cancelled"] = es_cancelled;
       out.summary["early_stop_saved_s"] = es_saved_s;

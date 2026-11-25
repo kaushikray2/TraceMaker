@@ -8103,6 +8103,7 @@ static bool load_state(const std::string& path, std::vector<ConnRoute>& routes, 
 PortfolioResult route_portfolio(const model::Board& board, const model::DesignRules& rules, const RouterOptions& base_in, int variants,
                                 const std::vector<int>& pick, int threads) {
   RouterOptions base = base_in;
+  const bool rounds_given = base_in.rounds > 0;          // issue #21: an explicit --rounds cap was supplied
   if (base.relax) {  // relax, route, legalise (doc 05 §41.3): the stages and the breathing are defaults of one switch
     const double c_board = nm_to_mm(std::max(rules.classes.empty() ? Coord{0} : rules.classes.front().clearance, rules.minimums.clearance));
     if (base.ramp_from_mm <= 0) base.ramp_from_mm = 0.6 * c_board;
@@ -8673,6 +8674,16 @@ PortfolioResult route_portfolio(const model::Board& board, const model::DesignRu
   pr.cancelled = es_cancelled;
   pr.saved_s = base.work_budget > 0 || base.round_work > 0 ? 0 : es_saved_s;  // report the saving in the currency the run was bounded by
   pr.saved_work = base.work_budget > 0 || base.round_work > 0 ? es_saved_work : 0;
+  // What stopped the rounds (issue #21): nothing to report when the board completed -- the
+  // routed count already says so. The wall clock outranks the budgets it interrupted; an
+  // explicit --rounds cap outranks the per-round work budget it counted out; anything else
+  // ended on work (each round's variants stopped on their round work budget, the default
+  // included, or a plain job's --work split across rounds).
+  if (pr.best.routed < pr.best.connections) {
+    if (rounds_timed_out) pr.stopped_by = "time";
+    else if (rounds_given) pr.stopped_by = "rounds";
+    else pr.stopped_by = "work";
+  }
   return pr;
 }
 
