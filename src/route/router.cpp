@@ -510,7 +510,14 @@ struct Router::Impl {
   mutable bool time_stopped = false;
   mutable bool deadline_stopped = false;  // the shared portfolio deadline (a sibling completed) ended the search
   bool out_of_budget() const {
-    if (opt.deadline && res.routed < res.connections && elapsed() > opt.deadline->load(std::memory_order_relaxed)) return time_stopped = deadline_stopped = true;
+    if (opt.deadline && res.routed < res.connections && elapsed() > opt.deadline->load(std::memory_order_relaxed)) {
+      // Only the first wall-clock stop classifies the run: if this search already stopped on its OWN
+      // time limit in an earlier phase, a sibling's later deadline must not reclassify that stop as a
+      // deadline stop -- the portfolio aggregation (time_limited && !deadline_stopped) would erase
+      // the real timeout from the report.
+      if (!time_stopped) deadline_stopped = true;
+      return time_stopped = true;
+    }
     if (opt.work_budget > 0 && static_cast<double>(res.expansions) >= static_cast<double>(opt.work_budget) * budget_scale) return true;
     if (elapsed() > opt.time_limit_s * budget_scale) return time_stopped = true;
     return false;
@@ -8474,7 +8481,11 @@ PortfolioResult route_portfolio(const model::Board& board, const model::DesignRu
         v.o.warm_tracks.clear();  // copper of --warm-pcb is only the first round's start; later rounds continue from the best state
         v.o.warm_vias.clear();
         v.o.sink = nullptr;
-        v.o.deadline = nullptr;
+        // The shared early-stop deadline is cleared from round 1 on (later rounds continue from the
+        // best state, bounded by their round budgets, not by siblings) -- but not on a resumed run's
+        // first round: clearing it there silently disabled even a forced --early-stop for exactly
+        // the warm/state-in runs, unlike the standard path, which never clears it.
+        if (round > 0) v.o.deadline = nullptr;
       }
     const model::DesignRules& round_rules = stage < ramp_rules.size() ? ramp_rules[stage] : rules;
     last_relaxed = stage < ramp_rules.size();
