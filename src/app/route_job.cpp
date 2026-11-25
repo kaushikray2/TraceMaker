@@ -1320,7 +1320,7 @@ RouteJobResult run_route_job(RouteJob job) {
               for (const double x : ro.radii_mm) r += (r.empty() ? "" : ", ") + fmt("%g", x);
               return r;
             }().c_str(), ro.step_work));
-    ro.threads = job.threads;
+    ro.threads = threads;  // the clamped local (max(1, job.threads)): a raw 0 would read as "all variants" inside repair and slip the cap
     const auto rep = passes::repair_open(*route_board, rules, res, opt, ro, log);
     if (rep.time_stopped) stage_time_limited = true;
     if (rep.stopped_early) stopped_early = true;  // an attempt's portfolio fired the sibling early-stop: not deterministic
@@ -2310,7 +2310,7 @@ RouteJobResult run_layer_advisor(RouteJob job, std::vector<int> counts) {
   const auto input = io::read_board_file(job.in);
   const std::string final_out = job.out, final_json = job.json_out, final_items = job.items_out;
   nlohmann::json tried = nlohmann::json::array();
-  bool any_time_limited = false, any_kb_used = false, all_deterministic = true;  // over every count tried: a wall-clock stop or a knowledge-base influence in any of them shapes which count is chosen
+  bool any_time_limited = false, any_kb_used = false, all_deterministic = true, any_stopped_early = false;  // over every count tried: a wall-clock stop or a knowledge-base influence in any of them shapes which count is chosen
   std::optional<RouteJobResult> best;
   int best_count = 0, best_open = 0;
   std::string best_tmp;
@@ -2343,6 +2343,7 @@ RouteJobResult run_layer_advisor(RouteJob job, std::vector<int> counts) {
                      {"unconnected_after_refill", r.unconnected_after_refill}, {"vias", r.result.vias.size()}, {"complete", complete},
                      {"seconds", r.summary.value("seconds", 0.0)}, {"time_limited", r.summary.value("time_limited", false)}});
     any_time_limited = any_time_limited || r.summary.value("time_limited", false);
+    any_stopped_early = any_stopped_early || r.summary.value("stopped_early", false);
     any_kb_used = any_kb_used || r.summary.value("kb_used", false);
     all_deterministic = all_deterministic && r.summary.value("deterministic", false);
     const std::string tmp = final_out.empty() ? std::string() : final_out + fmt(".%d-layers.tmp", c);
@@ -2369,6 +2370,7 @@ RouteJobResult run_layer_advisor(RouteJob job, std::vector<int> counts) {
                      final_out.empty() ? "" : ("; written to " + final_out).c_str()));
   best->summary["layers"] = {{"tried", tried}, {"chosen", best_count}, {"complete", complete}};
   best->summary["time_limited"] = any_time_limited;
+  best->summary["stopped_early"] = any_stopped_early;
   best->summary["kb_used"] = any_kb_used;
   best->summary["deterministic"] = all_deterministic;
   best->summary["run"]["output"] = final_out;
@@ -2458,7 +2460,7 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
     if (pr.result.connections > 0 && pr.result.routed >= pr.result.connections) return 0;
     return std::nullopt;
   };
-  bool any_time_limited = false, any_kb_used = false, all_deterministic = true;  // over every rung tried
+  bool any_time_limited = false, any_kb_used = false, all_deterministic = true, any_stopped_early = false;  // over every rung tried
   for (std::size_t k = 0; k < rungs.size(); ++k) {
     const Rung& rg = rungs[k];
     if (rg.chains) {
@@ -2548,6 +2550,7 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
     if (r.summary.contains("repair")) row["repair"] = {{"open_before", r.summary["repair"].value("open_before", 0)}, {"open_after", r.summary["repair"].value("open_after", 0)}};
     rows.push_back(row);
     any_time_limited = any_time_limited || r.summary.value("time_limited", false);
+    any_stopped_early = any_stopped_early || r.summary.value("stopped_early", false);
     any_kb_used = any_kb_used || r.summary.value("kb_used", false);
     all_deterministic = all_deterministic && r.summary.value("deterministic", false);
     if (guard_walls)
@@ -2587,6 +2590,7 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
                      : fmt("finish: %d open after every rung; written to %s", best_open, final_out.c_str()));
   best->summary["finish"] = {{"rungs", rows}, {"complete", best_open == 0}, {"open", best_open}};
   best->summary["time_limited"] = any_time_limited;
+  best->summary["stopped_early"] = any_stopped_early;
   best->summary["kb_used"] = any_kb_used;
   best->summary["deterministic"] = all_deterministic;
   if (guard_walls && best_walled_proved) best->summary["finish"]["walled_in"] = best_walled;
