@@ -17,11 +17,13 @@
 #include <limits>
 #include <map>
 #include <numeric>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <thread>
 #include <vector>
 
+#include "core/parallel.hpp"
 #include "drc/refill.hpp"
 #include "drc/rule_engine.hpp"
 #include "geom/shape.hpp"
@@ -127,6 +129,10 @@ bool is_open(const route::RouteResult& r, const Conn& c) {
 }  // namespace
 
 json measure_chains(const std::string& path, const ChainsOptions& opt, bool print) {
+  // Issue 52: the chains thread value caps this measurement too, unless a caller already set a cap (batch,
+  // a route job). Without one, zone refill inside the run fans out to secondary_allowance()'s unbounded.
+  std::optional<parallel::CapScope> cap_scope;
+  if (parallel::cap() <= 0) cap_scope.emplace(std::max(1, opt.threads));
   auto lb = io::read_board_file(path);
   const auto rules = io::read_design_rules(opt.rules_from.empty() ? path : opt.rules_from);
   model::Board board = lb.board;
