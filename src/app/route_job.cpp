@@ -2805,7 +2805,15 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
         best->summary.erase("failures");
         best->summary.erase("open_connections");  // chains moved copper without a route: the previous rung's per-connection detail is stale too
         best->summary.erase("rerouted");  // the rip belongs to the first rung's input, not to the board the chains finished
-        best->summary["exit_code"] = open == 0 ? 0 : 3;
+        // The struct follows the summary (issue 55): the process exit code is main's
+        // run_finish(...).exit_code() over these fields, and exit_reason reads them too -
+        // patching only the summary left the process exiting 3 under a summary claiming 0.
+        // Chains is not a refill, so the previous board's refill count must not stand.
+        best->result.routed = conns - open;
+        best->unconnected_after_refill = -1;
+        if (best->summary.contains("unconnected_after_refill")) best->summary.erase("unconnected_after_refill");
+        best->summary["exit_code"] = best->exit_code();
+        best->summary["exit_reason"] = best->exit_reason();
         fs::copy_file(best_tmp, final_out, fs::copy_options::overwrite_existing);
         copy_project_files(job.in, final_out);
       } else {

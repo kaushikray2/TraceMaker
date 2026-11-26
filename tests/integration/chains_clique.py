@@ -145,6 +145,30 @@ def synthetic_checks(tm, work):
     check(p.returncode == 0, f"synthetic apply rc {p.returncode}: {p.stdout[-300:]} {p.stderr[-200:]}")
     applied = json.loads(ap_js.read_text()).get("applied", {})
     check(applied.get("written") is True and applied.get("open_after") == 0, f"synthetic apply: {applied}")
+    # Issue 55: a finish whose chains rung closes the last open must agree with itself -
+    # the summary exit_code, the summary exit_reason and the process exit code all say
+    # complete. (Before the fix the summary claimed exit_code 0 with a stale
+    # exit_reason "open_connections" while the process exited 3.) The route rungs are
+    # starved (--work 1 for the searches, --repair-work 1 for the repair attempts) so
+    # the chains rung is the one that closes the connection: at a normal budget the
+    # fitted-rules rung - which forces its repair on - closes it first (a route rung
+    # replaces the result wholesale, which was never buggy) and the chains adoption
+    # block this check exists for never runs. The chains rung budgets from the chains
+    # options, not from --work, so it is not starved. The rung assertion below keeps
+    # the check from going vacuous if the ladder changes.
+    fin_out = work / "synth_finish.kicad_pcb"
+    fin_js = work / "synth_finish.json"
+    p = subprocess.run([str(tm), "route", str(board), "--finish", "--finish-chains", "--repair", "off",
+                        "--deterministic", "--work", "1", "--repair-work", "1", "-o", str(fin_out), "--json", str(fin_js)],
+                       capture_output=True, text=True)
+    check(p.returncode == 0, f"synthetic finish: rc {p.returncode} != 0: {p.stdout[-300:]} {p.stderr[-200:]}")
+    fin = json.loads(fin_js.read_text())
+    check(fin.get("finish", {}).get("complete") is True, f"synthetic finish: not complete: {fin.get('finish')}")
+    rungs = fin.get("finish", {}).get("rungs", [])
+    check(any(r.get("rung") == "rip-up chains" and r.get("kept") is True and r.get("open_after") == 0 for r in rungs),
+          f"synthetic finish: no kept rip-up chains rung closed the last open: {rungs}")
+    check(fin.get("exit_code") == 0, f"synthetic finish: summary exit_code {fin.get('exit_code')} != 0")
+    check(fin.get("exit_reason") == "complete", f"synthetic finish: summary exit_reason {fin.get('exit_reason')} != complete")
 
 
 def main():
