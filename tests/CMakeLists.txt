@@ -1,3 +1,9 @@
+# Modifications Copyright (C) 2026 SiliconBrane Inc.
+# Modified 2026 as part of the SiliconBrane fork of TraceMaker:
+# registered the batch, deterministic, exit-code, heartbeat, reroute-scope, route-open-only, seed-determinism and finish-rip-walls tests.
+# The modifications are licensed under GPL-3.0-or-later, the same
+# terms as the original work.
+
 find_package(Catch2 3 REQUIRED)
 include(Catch)
 

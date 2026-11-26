@@ -5,6 +5,13 @@
 //  - pitch 1.0 mm, 0.8 mm vias: gaps of 0.3 mm, walled in for the class's 0.12 mm track, but a 0.1 mm track gets out (a neck-down),
 //    so not enclosed; with the board minimum at 0.12 mm it is;
 //  - pitch 1.1 mm: gaps of 0.4 mm, the pin is not walled in at all.
+// Modifications Copyright (C) 2026 SiliconBrane Inc.
+// Modified 2026 as part of the SiliconBrane fork of TraceMaker:
+// added the wall_items proof test: a pin enclosed by four routed tracks names exactly those tracks.
+// The modifications are licensed under GPL-3.0-or-later, the same
+// terms as the original work. The original copyright notice above
+// remains in force for the original portions of this file.
+
 #include <catch2/catch_test_macros.hpp>
 #include <unistd.h>
 

@@ -1,4 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Modifications Copyright (C) 2026 SiliconBrane Inc.
+// Modified 2026 as part of the SiliconBrane fork of TraceMaker:
+// added the stopped_by regression test (time versus work).
+// The modifications are licensed under GPL-3.0-or-later, the same
+// terms as the original work. The original copyright notice above
+// remains in force for the original portions of this file.
+
 // Work profile (doc 10 §2, D88): the counters agree with the charged budget and do not depend on the thread count.
 #include <catch2/catch_test_macros.hpp>
 

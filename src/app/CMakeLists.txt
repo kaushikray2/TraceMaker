@@ -1,3 +1,9 @@
+# Modifications Copyright (C) 2026 SiliconBrane Inc.
+# Modified 2026 as part of the SiliconBrane fork of TraceMaker:
+# added the batch translation unit to tm_app_route.
+# The modifications are licensed under GPL-3.0-or-later, the same
+# terms as the original work.
+
 find_package(CLI11 CONFIG REQUIRED)
 find_package(nlohmann_json 3 REQUIRED)
 # One `route` run as a library function: shared by the CLI and the Python bindings (bindings/); and the open-connection causes (doc 05 §55).

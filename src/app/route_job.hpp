@@ -1,4 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Modifications Copyright (C) 2026 SiliconBrane Inc.
+// Modified 2026 as part of the SiliconBrane fork of TraceMaker:
+// RouteJob surface for the finish ladder, deterministic mode, scoped reroute and batch mode.
+// The modifications are licensed under GPL-3.0-or-later, the same
+// terms as the original work. The original copyright notice above
+// remains in force for the original portions of this file.
+
 #pragma once
 // One `tracemaker route` run as a reusable function, shared by the CLI (src/app/main.cpp) and the Python bindings
 // (bindings/), so both take exactly the same code path (design doc 08 §5).

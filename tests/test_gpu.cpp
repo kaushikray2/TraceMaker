@@ -1,4 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Modifications Copyright (C) 2026 SiliconBrane Inc.
+// Modified 2026 as part of the SiliconBrane fork of TraceMaker:
+// CUDA field validation tests; TM_WERROR=ON build fixes.
+// The modifications are licensed under GPL-3.0-or-later, the same
+// terms as the original work. The original copyright notice above
+// remains in force for the original portions of this file.
+
 // CPU-vs-GPU equivalence for CUDA Philox and the selected cost-to-go backend.
 // A device without enough free memory is skipped, not failed: the GPUs are shared with other jobs.
 #include <catch2/catch_test_macros.hpp>

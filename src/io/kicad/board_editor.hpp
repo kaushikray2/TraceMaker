@@ -1,4 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Modifications Copyright (C) 2026 SiliconBrane Inc.
+// Modified 2026 as part of the SiliconBrane fork of TraceMaker:
+// added remove_arc for the finish rip-walls rounds.
+// The modifications are licensed under GPL-3.0-or-later, the same
+// terms as the original work. The original copyright notice above
+// remains in force for the original portions of this file.
+
 #pragma once
 // Edits a loaded .kicad_pcb document in place, KiCad style (design doc 08 §3). Only the nodes TraceMaker
 // owns change: new segment/via nodes, removed tracks, and footprint placement. Everything else is kept

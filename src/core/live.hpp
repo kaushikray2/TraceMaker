@@ -1,4 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Modifications Copyright (C) 2026 SiliconBrane Inc.
+// Modified 2026 as part of the SiliconBrane fork of TraceMaker:
+// added the --heartbeat progress file for long route jobs.
+// The modifications are licensed under GPL-3.0-or-later, the same
+// terms as the original work. The original copyright notice above
+// remains in force for the original portions of this file.
+
 #pragma once
 // Live status of this process for the progress site's live page (devsite /live, D165): what the process is doing, written as
 // JSON to <dir>/<pid>.json about once a second by a background thread (written to a temporary file and renamed, so a reader
