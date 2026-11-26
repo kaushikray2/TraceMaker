@@ -174,13 +174,13 @@ TEST_CASE("escape proof: a pin walled in by routed vias names the vias", "[escap
   REQUIRE(other > 0);
   // Four routed vias on the axes around the pin: too close together for a track between them, and the pin's own
   // via fits only inside its pad.
-  const Coord d = mm_to_nm(0.52);
+  const Coord d = mm_to_nm(0.48);
   const Coord zero = 0;
   for (const auto& xy : {std::pair{d, zero}, std::pair{-d, zero}, std::pair{zero, d}, std::pair{zero, -d}}) {
     model::Via v;
     v.pos = {xy.first, xy.second};
-    v.size = mm_to_nm(0.45);
-    v.drill = mm_to_nm(0.22);
+    v.size = mm_to_nm(0.5);
+    v.drill = mm_to_nm(0.25);
     v.layer_top = 0;
     v.layer_bottom = 1;
     v.net = static_cast<model::NetId>(other);
