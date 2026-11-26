@@ -374,6 +374,14 @@ PinEscape EscapeAnalyser::Impl::analyse(int pad, bool soft) const {
             for (const auto& sh : pin.shapes)
               if (sh.closed && sh.pts.size() > 2 && geom::point_in_polygon(c, sh.pts)) in_pad = true;
             if (in_pad && !m.opt.via_in_pad) continue;
+            // A routed item is only worth naming (and ripping) at a cell the via could actually use once routed copper is gone: if any layer blocker at this cell is fixed copper, the via stays impossible here however much routed copper is ripped (issue 45).
+            bool fixed_blocked = false;
+            for (int U = 0; U < nl && !fixed_blocked; ++U) {
+              const int ou = via_layer_grids[static_cast<std::size_t>(U)].owner[static_cast<std::size_t>(k)];
+              if (ou < 0) continue;
+              const Wall& wu = via_layer_walls[static_cast<std::size_t>(U)][static_cast<std::size_t>(ou)];
+              if (!wu.item || (wu.item->kind != drc::ItemKind::Track && wu.item->kind != drc::ItemKind::Arc && wu.item->kind != drc::ItemKind::Via)) fixed_blocked = true;
+            }
             for (int V = 0; V < nl; ++V) {
               const int o = via_layer_grids[static_cast<std::size_t>(V)].owner[static_cast<std::size_t>(k)];
               if (o < 0) continue;
@@ -381,7 +389,7 @@ PinEscape EscapeAnalyser::Impl::analyse(int pad, bool soft) const {
               const LD d = std::hypot(LD(wl.pos.x - P.pos.x), LD(wl.pos.y - P.pos.y));
               auto it = res.walls.find(wl.what);
               if (it == res.walls.end() || d < it->second.first) res.walls[wl.what] = {d, wl.zone};
-              if (wl.item && wl.item->kind != drc::ItemKind::Pad && wl.item->kind != drc::ItemKind::Zone && wl.item->kind != drc::ItemKind::Graphic &&
+              if (!fixed_blocked && wl.item && wl.item->kind != drc::ItemKind::Pad && wl.item->kind != drc::ItemKind::Zone && wl.item->kind != drc::ItemKind::Graphic &&
                   std::find(res.items.begin(), res.items.end(), wl.item) == res.items.end())
                 res.items.push_back(wl.item);
             }

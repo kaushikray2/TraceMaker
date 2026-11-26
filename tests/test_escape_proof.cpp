@@ -256,3 +256,36 @@ TEST_CASE("escape proof: a via escape blocked by routed copper on another layer 
   CHECK(e.wall_items[0].index == 0);
   CHECK(e.wall_items[0].net == other);
 }
+
+TEST_CASE("escape proof: a routed via blocker under fixed copper is not named", "[escape_proof]") {
+  Ring r = make_ring(1.1);  // as the cross-layer case: the via escape is what keeps the pin open
+  for (auto& cl : r.rules.classes) cl.track_width = mm_to_nm(0.25);
+  r.rules.minimums.track_width = mm_to_nm(0.25);
+  const int pin_net = static_cast<int>(r.b.pads[static_cast<std::size_t>(r.pin)].net);
+  int other = -1;
+  for (const auto& pd : r.b.pads)
+    if (static_cast<int>(pd.net) != pin_net && pd.net != 0) { other = static_cast<int>(pd.net); break; }
+  REQUIRE(other > 0);
+  // The same bottom track as the cross-layer case: on its own it is the via's sole blocker and is named.
+  model::Track t;
+  t.a = {-mm_to_nm(1.0), 0};
+  t.b = {mm_to_nm(1.0), 0};
+  t.width = mm_to_nm(1.2);
+  t.layer = 1;
+  t.net = static_cast<model::NetId>(other);
+  r.b.tracks.push_back(t);
+  // Plus a large fixed pad of the same other net over the pin on the top layer: every via cell beside the pin
+  // is now fixed-blocked on the top layer, so ripping the bottom track could never place the via (issue 45).
+  model::Pad big = r.b.pads[static_cast<std::size_t>(r.pin)];
+  big.pos = {0, 0};
+  big.size_x = mm_to_nm(2.4);
+  big.size_y = mm_to_nm(2.4);
+  big.copper = model::layer_bit(0);
+  big.net = static_cast<model::NetId>(other);
+  big.drill_x = 0;
+  big.drill_y = 0;
+  r.b.pads.push_back(big);
+  const auto e = analysis::EscapeAnalyser(r.b, r.rules).run(r.pin);
+  REQUIRE(e.enclosed);
+  CHECK(e.wall_items.empty());
+}
