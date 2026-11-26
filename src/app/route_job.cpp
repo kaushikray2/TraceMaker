@@ -2701,6 +2701,8 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
   int best_walled = 0;              // the guard's wall price of the best board so far (guard_walls only)
   bool best_walled_proved = false;  // best_walled is a proof over the current best board (guard_walls only)
   bool best_fit = false;            // the best board was produced under rules fitted from the input (a kept fit rung)
+  bool best_masks = false;          // the best board was produced with pad mask openings open to tracks (a kept masks rung)
+  int best_layers = 0;              // the copper layer count the best board was produced at (0: the board count itself)
   // A wall proof over a board file itself: a minimal route job whose why_open classifies the board's own open
   // pins against its own copper, at its own layer count. Used after a kept chains rung -- the one rung kind that
   // changes the best board without running a route, so no rung summary carries its walls (hardening #8) -- and
@@ -2715,7 +2717,7 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
     pj.hold = false;
     pj.reroute = false;
     pj.warm_pcb.clear();
-    pj.copper_layers = 0;
+    pj.copper_layers = best_layers;
     pj.repair = "off";
     pj.rescue = false;
     pj.why_open = true;
@@ -2724,6 +2726,7 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
     // proof fits from the original input too (the rungs fit from job.in, never from a rung's own copper). A
     // job-level fit_rules_from already rides along in the copy and is left alone, as the rungs leave it.
     if (best_fit && pj.fit_rules_from.empty()) pj.fit_rules_from = job.in;
+    if (best_masks) pj.opt.soft_pad_masks = true;  // proof the board under the mask rule that produced it
     pj.opt.work_budget = 1;
     // A proof is minimal and invisible: none of the run search shaping rides along in the copy. Left in,
     // --relax would ignore the work budget (the relax path runs on round_work x rounds, not work_budget),
@@ -2860,6 +2863,8 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
       best_tmp = tmp;
       best_open = open;
       best_fit = rg.fit;
+      best_masks = rg.masks;
+      best_layers = rg.layers;
       if (guard_walls) {
         // The rung's walled prices the board it produced, which is now the best board: adopt it as its price.
         if (open == 0) {
@@ -2935,11 +2940,15 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
       j.hold = false;
       j.reroute = false;
       j.warm_pcb.clear();
+      j.copper_layers = best_layers;
+      if (best_masks) j.opt.soft_pad_masks = true;
       j.why_open = true;
       j.why_open_output = true;
       if (best_fit) {
         if (j.fit_rules_from.empty()) j.fit_rules_from = job.in;
         j.repair = "on";
+        j.repair_opt.select = "both";
+        j.repair_opt.focus = true;
       }
       const auto t0 = std::chrono::steady_clock::now();
       RouteJobResult r = run_route_job(std::move(j));
