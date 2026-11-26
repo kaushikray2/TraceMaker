@@ -479,24 +479,18 @@ json measure_chains(const std::string& path, const ChainsOptions& opt, bool prin
     if (const auto v = cur.net_by_name(cq.victim.net); v > 0) set.insert(v);
     for (const auto& n : cq.victim.blockers)
       if (const auto id = cur.net_by_name(n); id > 0 && id != self) set.insert(id);
-    // Pair closure, on the chains' own terms: a partner joins only when it has copper that can actually lift.
-    {
-      std::set<model::NetId> liftable;
-      for (const auto& t : cur.tracks)
-        if (!t.locked) liftable.insert(t.net);
-      for (const auto& t : cur.arcs)
-        if (!t.locked) liftable.insert(t.net);
-      for (const auto& v : cur.vias)
-        if (!v.locked) liftable.insert(v.net);
-      for (bool grew = true; grew;) {
-        grew = false;
-        for (const auto n : std::vector<model::NetId>(set.begin(), set.end()))
-          if (static_cast<std::size_t>(n) < pair_partner.size())
-            if (const auto p = pair_partner[static_cast<std::size_t>(n)]; p > 0 && p != self && !set.count(p) && liftable.count(p)) {
-              set.insert(p);
-              grew = true;
-            }
-      }
+    // Pair closure, on the depth-1 joint route's terms: a member's partner joins lifted or not (issue 51).
+    // Gating the closure on the partner having copper that can lift splits the pair whenever both halves
+    // failed the first route: the copperless partner stayed out of the set, landed in skip_nets below, and
+    // the root half routed solo, single-ended, with the commit check none the wiser.
+    for (bool grew = true; grew;) {
+      grew = false;
+      for (const auto n : std::vector<model::NetId>(set.begin(), set.end()))
+        if (static_cast<std::size_t>(n) < pair_partner.size())
+          if (const auto p = pair_partner[static_cast<std::size_t>(n)]; p > 0 && p != self && !set.count(p)) {
+            set.insert(p);
+            grew = true;
+          }
     }
     row.clique_nets = static_cast<int>(set.size());
     if (set.size() < 3 || static_cast<int>(set.size()) > opt.clique_max_nets) return false;
