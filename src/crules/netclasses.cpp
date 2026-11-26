@@ -25,12 +25,15 @@ std::vector<SyntheticClass> synthetic_net_classes(const model::Board& b, const m
     const Instance& in = det.instances[static_cast<std::size_t>(e.instance)];
     if (in.confidence < cat.apply || in.disabled(e.spec->id) || e.status == Status::SatisfiedByBoard) continue;
     Coord width = 0, pair_width = 0, pair_gap = 0;
+    std::map<std::string, Coord> width_on, pair_width_on, pair_gap_on;  // issue 37: the per-layer solutions, kept
     std::string how;
     if (e.spec->kind == "impedance" && e.impedance && e.impedance->computed) {
       const LineSolution* outer = nullptr;
       bool inner_differs = false;
       for (const auto& l : e.impedance->lines) {
         if (!l.ok) continue;
+        width_on[l.layer] = l.width;
+        if (l.differential) pair_width_on[l.layer] = l.width, pair_gap_on[l.layer] = l.gap;
         if (!outer) outer = &l;  // lines are in copper order: the first solved layer is the front
         else if (l.width != outer->width || l.gap != outer->gap) inner_differs = true;
       }
@@ -39,10 +42,12 @@ std::vector<SyntheticClass> synthetic_net_classes(const model::Board& b, const m
       if (outer->differential) pair_width = outer->width, pair_gap = outer->gap;
       how = std::string(outer->differential ? "pair " : "") + mm3(outer->width) + (outer->differential ? " / gap " + mm3(outer->gap) : "") + " mm for " +
             std::to_string(static_cast<int>(outer->target)) + " ohm on " + outer->layer +
-            (inner_differs ? "; other layers need a different width, which the router's single width per net does not give" : "");
+            (inner_differs ? "; per-layer widths kept for the router" : "");
     } else if (e.spec->kind == "width_for_current") {
       if (e.current && e.current->computed) {
         width = e.current->outer_width;
+        for (std::size_t i = 0; i < b.copper.size(); ++i)
+          width_on[b.copper_name(static_cast<int>(i))] = (i == 0 || i + 1 == b.copper.size()) ? e.current->outer_width : e.current->inner_width;
         how = mm3(width) + " mm for " + mm3(static_cast<Coord>(e.current->amps * 1e6)) + " A on outer layers" +
               (e.current->inner_width > e.current->outer_width ? "; inner layers would need " + mm3(e.current->inner_width) + " mm" : "") +
               (e.current->copper_assumed ? " (35 um copper assumed)" : "");
@@ -73,6 +78,9 @@ std::vector<SyntheticClass> synthetic_net_classes(const model::Board& b, const m
       sc.cls.diff_pair_gap = std::max(pair_gap, rules.minimums.clearance);
       sc.cls.has_diff_pair_gap = true;
     }
+    sc.cls.track_width_on = width_on;
+    sc.cls.diff_pair_width_on = pair_width_on;
+    sc.cls.diff_pair_gap_on = pair_gap_on;
     sc.rule = e.spec->id;
     sc.detail = how;
     for (model::NetId n : nets) {
@@ -82,6 +90,9 @@ std::vector<SyntheticClass> synthetic_net_classes(const model::Board& b, const m
           prev.cls.track_width = sc.cls.track_width;
           prev.detail += "; widened by " + e.spec->id + " (" + how + ")";
         }
+        for (const auto& [layer, w] : sc.cls.track_width_on) prev.cls.track_width_on[layer] = std::max(prev.cls.track_width_on[layer], w);
+        for (const auto& [layer, w] : sc.cls.diff_pair_width_on) prev.cls.diff_pair_width_on[layer] = std::max(prev.cls.diff_pair_width_on[layer], w);
+        for (const auto& [layer, g] : sc.cls.diff_pair_gap_on) prev.cls.diff_pair_gap_on[layer] = std::max(prev.cls.diff_pair_gap_on[layer], g);
         continue;
       }
       sc.nets.push_back(n);

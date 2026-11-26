@@ -405,6 +405,18 @@ TEST_CASE("net classes from rules: computed widths become classes for Default-cl
   CHECK(usb->cls.diff_pair_gap == f->gap);
   CHECK(usb->cls.has_diff_pair_gap);
   CHECK(usb->cls.name.starts_with("tmk_USB2-01_"));
+  // Issue 37: every solved layer width survives into the per-layer maps (the scalar above keeps
+  // only the front layer solution); differential lines also fill the pair maps.
+  for (const auto& L : e->impedance->lines) {
+    if (!L.ok) continue;
+    REQUIRE(usb->cls.track_width_on.count(L.layer));
+    CHECK(usb->cls.track_width_on.at(L.layer) == L.width);
+    if (L.differential) {
+      REQUIRE(usb->cls.diff_pair_width_on.count(L.layer));
+      CHECK(usb->cls.diff_pair_width_on.at(L.layer) == L.width);
+      CHECK(usb->cls.diff_pair_gap_on.at(L.layer) == L.gap);
+    }
+  }
   // Applied: the two nets resolve to the class, every other net stays in Default.
   const model::DesignRules with = with_synthetic_classes(b, rules, sc);
   int in_class = 0;
