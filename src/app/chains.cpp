@@ -619,9 +619,12 @@ json measure_chains(const std::string& path, const ChainsOptions& opt, bool prin
       if (v.node != sexpr::kNoNode) left.insert(v.node);
       else new_vias.push_back(v);
     }
+    for (const auto& a : board.arcs)
+      if (a.node != sexpr::kNoNode) left.insert(a.node);  // a chain never creates arcs, it only lifts them (issue 50)
     model::Board now = lb.board;
     std::erase_if(now.tracks, [&](const model::Track& t) { return !left.count(t.node); });
     std::erase_if(now.vias, [&](const model::Via& v) { return !left.count(v.node); });
+    std::erase_if(now.arcs, [&](const model::ArcTrack& a) { return !left.count(a.node); });
     const auto cut = passes::padless_islands(lb.board, now, new_tracks, new_vias);
     std::set<sexpr::NodeId> cut_nodes;
     for (const int k : cut.base_tracks) cut_nodes.insert(now.tracks[static_cast<std::size_t>(k)].node);
@@ -648,6 +651,8 @@ json measure_chains(const std::string& path, const ChainsOptions& opt, bool prin
         if (!left.count(lb.board.tracks[k].node) || cut_nodes.count(lb.board.tracks[k].node)) ed.remove_track(k);
       for (std::size_t k = lb.board.vias.size(); k-- > 0;)
         if (!left.count(lb.board.vias[k].node) || cut_nodes.count(lb.board.vias[k].node)) ed.remove_via(k);
+      for (std::size_t k = lb.board.arcs.size(); k-- > 0;)
+        if (!left.count(lb.board.arcs[k].node)) ed.remove_arc(k);  // a lifted arc leaves the file too (issue 50)
       for (const auto& t : add_t) ed.add_track(t);
       for (const auto& v : add_v) ed.add_via(v);
       ed.save(opt.apply_out);
