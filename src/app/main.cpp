@@ -1733,6 +1733,10 @@ static int run_main(int argc, char** argv) {
   chains_cmd->add_option("--causes", ch_opt.causes_path, "A `causes` report for this board (tracemaker causes --json): attempt the connections rearrangement can close first, and skip the ones it proves cannot close (no_path_bare, pin_cannot_escape)")->check(CLI::ExistingFile);
   chains_cmd->add_option("--threads", ch_opt.threads, "Open connections measured at once (the result does not depend on it; default 8)")->check(CLI::Range(1, 256));
   chains_cmd->add_option("--seed", ch_opt.seed, "Router seed (default 1)");
+  chains_cmd->add_flag("--clique,!--no-clique", ch_opt.clique, "Phase 3B: on a too_deep / lifted_net_no_path_bare failure, one bounded clique attempt at the root over the nets the chain lifted or blamed (default on)");
+  chains_cmd->add_option("--clique-work", ch_opt.clique_work, "Work budget of the clique portfolio attempt (default 8 M)");
+  chains_cmd->add_option("--clique-variants", ch_opt.clique_variants, "Portfolio variants of the clique attempt (default 6)")->check(CLI::Range(1, 16));
+  chains_cmd->add_option("--clique-max-nets", ch_opt.clique_max_nets, "Clique attempts over more nets than this are not attempted (default 12)")->check(CLI::Range(3, 64));
   chains_cmd->add_flag("--soft-zones", ch_opt.soft_zones, "Zone fills do not block other nets (as route --soft-zones)");
   chains_cmd->add_flag("!--no-fill-planes", ch_opt.fill_planes, "Do not fill zones that have no fill");
   auto* fit_cmd = app.add_subcommand("fit-rules", "Rules a board's own copper breaks, and the values route --fit-rules would relax them to (read-only; doc 20 §2.8)");

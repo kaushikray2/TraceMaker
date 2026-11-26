@@ -39,6 +39,14 @@ struct ChainsOptions {
   int max_nets = 32;                // and chains that lift more nets than this in all
   int max_shrink = 40;              // blocker sets larger than this are not shrunk (one run per member)
   double rip_mm = 1.0;              // a blocker's copper is lifted within this distance of the new route (0 = the whole net)
+  // Phase 3B (issue 30): when a chain fails too_deep or lifted_net_no_path_bare, one bounded clique attempt at the root:
+  // the nets the recursion lifted or blamed (pair-closed, 3..clique_max_nets) are lifted inside a window around the root
+  // and deepest-victim pads and routed together by the portfolio under clique_work. Committed only when the failed
+  // connection closes and no clique net ends worse. Off with clique = false (the A/B measurement switch).
+  bool clique = true;
+  long clique_work = 8'000'000;  // work budget of the clique portfolio attempt
+  int clique_variants = 6;       // portfolio variants of the attempt (4..8 by design)
+  int clique_max_nets = 12;      // conflict sets larger than this are not attempted
   int threads = 8;                  // open connections measured at once (the result does not depend on it)
   std::uint64_t seed = 1;
   bool fill_planes = true;          // as `causes`

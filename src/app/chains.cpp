@@ -14,6 +14,7 @@
 #include <cstdio>
 #include <fstream>
 #include <functional>
+#include <limits>
 #include <map>
 #include <numeric>
 #include <set>
@@ -23,6 +24,7 @@
 
 #include "drc/refill.hpp"
 #include "drc/rule_engine.hpp"
+#include "geom/shape.hpp"
 #include "io/kicad/board_editor.hpp"
 #include "io/kicad/board_reader.hpp"
 #include "io/kicad/project_reader.hpp"
@@ -105,6 +107,16 @@ struct Conn {
 };
 
 Conn conn_of(const route::RouteResult::Unrouted& u) { return {u.net, u.a, u.b, u.pad_a, u.pad_b, u.blockers}; }
+
+// Phase 3B (issue 30): what a chain's recursion touched, accumulated across its levels so a failure at any depth can be
+// re-tried once at the root over the whole conflict set. One per chain attempt (the measurement pool runs attempts in
+// parallel; nothing here is shared).
+struct Clique {
+  std::set<model::NetId> nets;  // the root net plus every net any level lifted
+  Conn victim;                  // the deepest failing connection: its net and blockers join the set
+  int victim_depth = 0;
+  bool have_victim = false;
+};
 
 bool is_open(const route::RouteResult& r, const Conn& c) {
   for (const auto& u : r.unrouted)
@@ -206,6 +218,9 @@ json measure_chains(const std::string& path, const ChainsOptions& opt, bool prin
     std::string cause;   // the `causes` class of this connection, when a report was given
     bool skip = false;   // the report proves rearrangement cannot close it: never attempted
     bool co_closed = false;  // closed as a side effect of another connection's chain on the same board (apply only)
+    bool clique = false;       // closed by the Phase 3B clique attempt at the root (issue 30)
+    bool clique_tried = false;  // the clique portfolio ran for this connection
+    int clique_nets = 0;       // size of the pair-closed conflict set when the clique gate matched
   };
   std::vector<Row> rows(first.unrouted.size());
 
@@ -257,7 +272,7 @@ json measure_chains(const std::string& path, const ChainsOptions& opt, bool prin
   }
 
   // Closes `c` on `cur` (changed only on success) at chain depth `depth` (1 = the open connection itself).
-  std::function<bool(model::Board&, const Conn&, int, Row&)> close = [&](model::Board& cur, const Conn& c, int depth, Row& row) -> bool {
+  std::function<bool(model::Board&, const Conn&, int, Row&, Clique&)> close = [&](model::Board& cur, const Conn& c, int depth, Row& row, Clique& cq) -> bool {
     const model::NetId self = cur.net_by_name(c.net);
     std::set<model::NetId> lift;
     route::RouteResult kept;
@@ -292,6 +307,11 @@ json measure_chains(const std::string& path, const ChainsOptions& opt, bool prin
         if (!v.locked && v.net != self) all.insert(v.net);
       have = false;
       if (!try_route(all)) {
+        if (depth > 1 && depth >= cq.victim_depth) {
+          cq.victim = c;
+          cq.victim_depth = depth;
+          cq.have_victim = true;
+        }
         row.fail = depth == 1 ? "no_path_bare" : "lifted_net_no_path_bare";
         return false;
       }
@@ -345,6 +365,10 @@ json measure_chains(const std::string& path, const ChainsOptions& opt, bool prin
             }
       }
     }
+    // Phase 3B: the conflict set grows with every level's final lift set, the root net included, so a failure at any
+    // depth can be re-tried once at the root over everything the recursion touched.
+    cq.nets.insert(self);
+    for (const auto n : lift) cq.nets.insert(n);
     if (depth == 1) {
       row.first_blockers = static_cast<int>(lift.size());
       row.blockers_from = from;
@@ -407,6 +431,11 @@ json measure_chains(const std::string& path, const ChainsOptions& opt, bool prin
     for (const auto& u : again.unrouted) {
       if (!names.count(u.net) || base_pairs.count(std::minmax(u.pad_a, u.pad_b))) continue;  // not lifted, or open before the chain
       if (depth + 1 > opt.max_depth) {
+        if (depth + 1 >= cq.victim_depth) {
+          cq.victim = conn_of(u);
+          cq.victim_depth = depth + 1;
+          cq.have_victim = true;
+        }
         row.fail = "too_deep";
         return false;
       }
@@ -421,10 +450,116 @@ json measure_chains(const std::string& path, const ChainsOptions& opt, bool prin
       Conn cc = cu;
       for (const auto& v : check.unrouted)
         if (is_open(check, cu) && v.net == cu.net && v.pad_a == cu.pad_a && v.pad_b == cu.pad_b) cc.blockers = v.blockers;
-      if (!close(next, cc, depth + 1, row)) return false;
+      if (!close(next, cc, depth + 1, row, cq)) return false;
     }
     cur = std::move(next);
     return true;
+  };
+
+  // Phase 3B (issue 30): the clique attempt. Fires once per failed chain, at the root, when the failure class is
+  // too_deep or lifted_net_no_path_bare and the accumulated conflict set (root net + every lifted net + the deepest
+  // victim and its blockers, pair-closed) holds 3..clique_max_nets nets. The set's copper is lifted inside a window
+  // around the root and victim pads (a pair member's copper lifts whole, as in the chains' own near_or_paired) and
+  // the set is routed together by the portfolio under the solver bound. Committed only when the failed connection
+  // closes and every set net ends no worse than before the chain; on a miss nothing is committed and the original
+  // failure string stands.
+  auto try_clique = [&](model::Board& cur, const Conn& root, Row& row, Clique& cq, bool serial) -> bool {
+    if (!opt.clique || !cq.have_victim) return false;
+    if (row.fail != "too_deep" && row.fail != "lifted_net_no_path_bare") return false;
+    const model::NetId self = cur.net_by_name(root.net);
+    if (self <= 0) return false;
+    std::set<model::NetId> set = cq.nets;
+    set.insert(self);
+    if (const auto v = cur.net_by_name(cq.victim.net); v > 0) set.insert(v);
+    for (const auto& n : cq.victim.blockers)
+      if (const auto id = cur.net_by_name(n); id > 0 && id != self) set.insert(id);
+    // Pair closure, on the chains' own terms: a partner joins only when it has copper that can actually lift.
+    {
+      std::set<model::NetId> liftable;
+      for (const auto& t : cur.tracks)
+        if (!t.locked) liftable.insert(t.net);
+      for (const auto& t : cur.arcs)
+        if (!t.locked) liftable.insert(t.net);
+      for (const auto& v : cur.vias)
+        if (!v.locked) liftable.insert(v.net);
+      for (bool grew = true; grew;) {
+        grew = false;
+        for (const auto n : std::vector<model::NetId>(set.begin(), set.end()))
+          if (static_cast<std::size_t>(n) < pair_partner.size())
+            if (const auto p = pair_partner[static_cast<std::size_t>(n)]; p > 0 && p != self && !set.count(p) && liftable.count(p)) {
+              set.insert(p);
+              grew = true;
+            }
+      }
+    }
+    row.clique_nets = static_cast<int>(set.size());
+    if (set.size() < 3 || static_cast<int>(set.size()) > opt.clique_max_nets) return false;
+    // The window: the root and victim pads, inflated by the lift distance, the clearance and half a millimetre.
+    geom::Point lo{std::numeric_limits<Coord>::max(), std::numeric_limits<Coord>::max()};
+    geom::Point hi{std::numeric_limits<Coord>::lowest(), std::numeric_limits<Coord>::lowest()};
+    bool any_pad = false;
+    auto span = [&](const Conn& c) {
+      for (const int pi : {c.pad_a, c.pad_b}) {
+        if (pi < 0 || static_cast<std::size_t>(pi) >= cur.pads.size()) continue;
+        const auto& p = cur.pads[static_cast<std::size_t>(pi)].pos;
+        lo.x = std::min(lo.x, p.x);
+        lo.y = std::min(lo.y, p.y);
+        hi.x = std::max(hi.x, p.x);
+        hi.y = std::max(hi.y, p.y);
+        any_pad = true;
+      }
+    };
+    span(root);
+    span(cq.victim);
+    if (!any_pad) return false;
+    const Coord margin = rip + clearance + 500'000;
+    lo.x -= margin;
+    lo.y -= margin;
+    hi.x += margin;
+    hi.y += margin;
+    auto in_window = [&](const Piece& pc) {
+      auto inside = [&](const geom::Point& p) { return p.x >= lo.x && p.x <= hi.x && p.y >= lo.y && p.y <= hi.y; };
+      if (inside(pc.a) || inside(pc.b)) return true;
+      const geom::Point c1{lo.x, lo.y}, c2{hi.x, lo.y}, c3{hi.x, hi.y}, c4{lo.x, hi.y};
+      return geom::segments_intersect(pc.a, pc.b, c1, c2) || geom::segments_intersect(pc.a, pc.b, c2, c3) ||
+             geom::segments_intersect(pc.a, pc.b, c3, c4) || geom::segments_intersect(pc.a, pc.b, c4, c1);
+    };
+    // A piece of a net whose pair partner is in play lifts whole (the chains' near_or_paired rule); anything else
+    // lifts only inside the window. Locked copper never lifts (lift_copper itself enforces that).
+    auto win_or_paired = [&](const Piece& pc) {
+      if (static_cast<std::size_t>(pc.net) < pair_partner.size())
+        if (const auto q = pair_partner[static_cast<std::size_t>(pc.net)]; q > 0 && (q == self || set.count(q))) return true;
+      return in_window(pc);
+    };
+    model::Board t = cur;
+    lift_copper(t, set, win_or_paired);
+    for (auto& tr : t.tracks) tr.locked = true;
+    for (auto& tr : t.arcs) tr.locked = true;
+    for (auto& v : t.vias) v.locked = true;
+    route::RouterOptions o = base;
+    o.work_budget = opt.clique_work;
+    for (const auto& n : t.nets)
+      if (n.id > 0 && !n.name.empty() && !set.count(n.id)) o.skip_nets.push_back(n.name);
+    row.clique_tried = true;
+    ++row.runs;
+    const auto pres = route::route_portfolio(t, rules, o, opt.clique_variants, {}, serial ? std::max(1, opt.threads) : 1);
+    const auto& r = pres.best;
+    if (is_open(r, root)) return false;
+    for (const auto n : set) {
+      const auto& name = cur.nets[static_cast<std::size_t>(n)].name;
+      const int before = base_open.count(name) ? base_open.at(name) : 0;
+      if (open_count(r, name) > before - (n == self ? 1 : 0)) return false;
+    }
+    lift_copper(cur, set, win_or_paired);
+    add_copper(cur, r);
+    row.clique = true;
+    return true;
+  };
+  // One chain attempt: the recursion, and on a matching failure the single clique attempt at the root.
+  auto close_top = [&](model::Board& cur, const Conn& c, Row& row, bool serial) {
+    Clique cq;
+    if (close(cur, c, 1, row, cq)) return true;
+    return try_clique(cur, c, row, cq, serial);
   };
 
   const bool apply = !opt.apply_out.empty();
@@ -440,7 +575,7 @@ json measure_chains(const std::string& path, const ChainsOptions& opt, bool prin
         const auto& u = first.unrouted[i];
         model::Board cur = board;
         rows[i].fail.clear();
-        rows[i].closed = close(cur, conn_of(u), 1, rows[i]);
+        rows[i].closed = close_top(cur, conn_of(u), rows[i], true);
         if (!rows[i].closed) continue;
         closed_any = true;
         for (auto& t : cur.tracks)
@@ -528,7 +663,7 @@ json measure_chains(const std::string& path, const ChainsOptions& opt, bool prin
           const std::size_t i = attempt_order[k];
           if (rows[i].skip) continue;
           model::Board cur = board;
-          rows[i].closed = close(cur, conn_of(first.unrouted[i]), 1, rows[i]);
+          rows[i].closed = close_top(cur, conn_of(first.unrouted[i]), rows[i], false);
         }
       });
     for (auto& t : pool) t.join();
@@ -539,16 +674,20 @@ json measure_chains(const std::string& path, const ChainsOptions& opt, bool prin
   for (std::size_t i = 0; i < rows.size(); ++i) {
     const auto& u = first.unrouted[i];
     const auto& r = rows[i];
-    const std::string key = r.closed ? (r.co_closed ? "co_closed" : (r.joint ? "closed_joint" : "closed_depth_" + std::to_string(r.depth))) : r.fail;
+    const std::string key = r.closed ? (r.co_closed ? "co_closed" : (r.clique ? "closed_clique" : (r.joint ? "closed_joint" : "closed_depth_" + std::to_string(r.depth)))) : r.fail;
     ++tally[key];
     json c{{"net", u.net}, {"a", u.a}, {"b", u.b}, {"reason", u.reason}, {"closed", r.closed}, {"depth", r.depth}, {"nets_lifted", r.lifted},
            {"first_blockers", r.first_blockers}, {"joint", r.joint}, {"first_nets", r.first_nets}, {"blockers_from", r.blockers_from}, {"runs", r.runs}};
     if (!r.closed) c["fail"] = r.fail;
     if (r.co_closed) c["co_closed"] = true;
+    if (r.clique) c["clique"] = true;
+    if (r.clique_tried) c["clique_tried"] = true;
+    if (r.clique_nets > 0) c["clique_nets"] = r.clique_nets;
     if (!r.cause.empty()) c["cause"] = r.cause;
     conns.push_back(std::move(c));
   }
-  out["options"] = {{"work", opt.work}, {"max_depth", opt.max_depth}, {"max_nets", opt.max_nets}, {"rip_mm", opt.rip_mm}, {"apply_sweeps", opt.apply_sweeps}, {"causes", opt.causes_path}};
+  out["options"] = {{"work", opt.work}, {"max_depth", opt.max_depth}, {"max_nets", opt.max_nets}, {"rip_mm", opt.rip_mm}, {"apply_sweeps", opt.apply_sweeps}, {"causes", opt.causes_path},
+                     {"clique", opt.clique}, {"clique_work", opt.clique_work}, {"clique_variants", opt.clique_variants}, {"clique_max_nets", opt.clique_max_nets}};
   out["tally"] = tally;
   out["connections"] = conns;
   if (apply) out["applied"] = applied;
