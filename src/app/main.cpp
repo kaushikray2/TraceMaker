@@ -1287,6 +1287,7 @@ static int run_main(int argc, char** argv) {
   route->add_option("--global-congestion-from", ropt.global_congestion_from, "Congestion threshold, eighths of tile capacity")->group("");
   route->add_option("--global-congestion-pen", ropt.global_congestion_pen, "Congestion cost, pitches per step per eighth above the threshold")->group("");
   route->add_flag("--escape-plan,!--no-escape-plan", ropt.escape_plan, "Reserve escape corridors for the pins of dense packages (QFP, BGA) before routing");
+  route->add_flag("--escape-release-open", ropt.escape_release_open, "With --escape-plan: at the first negotiation pass, give back the corridors of pads no routed connection used (issue 39)");
   route->add_option("--escape-length", ropt.escape_length_mm, "Escape plan: perimeter corridors run this far (mm) past the package edge, as far as no fixed copper is in the way (default 2): bundles of parallel straight escapes")->group("");
   route->add_option("--fanout-heads", ropt.fanout_heads_mm, "Before routing, each perimeter pin of a dense four-sided package gets the first part of its route, this far (mm) past the package: straight, or in staggered 45-degree bundles toward the destinations, whichever a side has room for; fixed copper of the pin's net during routing, not written out (0 = off)")->group("");
   route->add_option("--fanout-heads-min-pins", ropt.fanout_heads_min_pins, "With --fanout-heads: perimeter pins a package needs (default 32)")->group("");

@@ -258,6 +258,7 @@ struct RouterOptions {
   bool supply_first = false;    // doc 05 §51: nets with 2+ perimeter pins on one dense package (supply and core nets: +3V3, a core rail) and no pour are routed before everything else and may not be ripped (as --first-nets); the bundles of --bundle-escape are still placed first (placing them after the supply nets was worse: 20 against 13 unrouted on the EtherCAT shield)
   double escape_via_keep_mm = 0;  // D156: with the escape plan, no other net's via where its copper would cover an open pin's corridor, this far past the pad edge (0 = off)
   bool escape_persist = false;  // a ripped-up connection gets its pins' corridors back; a corridor is kept while the net has other open connections at that package
+  bool escape_release_open = false;  // issue 39: at the first negotiation pass, give back the corridors of pads no routed connection used (they are hard blocks for every other net while their own connections stay open)
   bool radial_supply = false;   // spanning tree: no edge between two pins of one dense package for a net with 3+ pins there (each pin goes to a capacitor or via; the trunk forms outside the escape band)
   double radial_penalty_mm = 10;  // what such an edge costs in the spanning tree
   bool escape_second_ring = false;  // second-ring balls escape between two outer balls instead of by dog-bone
@@ -439,6 +440,7 @@ struct RouteResult {
   int via_shoves = 0;              // --via-shove: stuck connections routed after moving another net's via
   int via_shove_trials = 0;        // routing attempts after a via move
   int escape_reclaimed = 0;        // --escape-persist: corridors given back to the pins of a ripped-up connection
+  int escape_released_open = 0;    // issue 39: pads whose corridors were given back at the first negotiation pass
   int fanout_heads = 0;            // --fanout-heads: pins given a head before routing
   int fanout_holds = 0;            // --fanout-hold: placeholder tracks laid along open pins' corridors before the strict pass (all strict passes)
   int escape_corridors = 0;     // escape corridors reserved (M9)          // nets brought into their custom length range by meanders                // differential pairs routed coupled            // connections improved by the clean-up pass

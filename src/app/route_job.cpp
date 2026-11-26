@@ -2324,7 +2324,7 @@ RouteJobResult run_route_job(RouteJob job) {
                  {"vias", res.vias.size()},  {"seconds", job_seconds},         {"variant_seconds", res.seconds},
                  {"expansions", res.expansions}, {"pitch_mm", nm_to_mm(res.pitch)}, {"failures", res.failures},
                  {"variant", best_index}, {"variant_name", best_name}, {"escape_corridors", res.escape_corridors},
-                 {"escape_corridor_mm", res.escape_corridor_mm}, {"package_pin_edges", res.package_pin_edges}, {"line_crossings", res.line_crossings}, {"escape_reclaimed", res.escape_reclaimed},
+                 {"escape_corridor_mm", res.escape_corridor_mm}, {"package_pin_edges", res.package_pin_edges}, {"line_crossings", res.line_crossings}, {"escape_reclaimed", res.escape_reclaimed}, {"escape_released_open", res.escape_released_open},
                  {"bundle_groups", res.bundle_groups}, {"bundle_spines", res.bundle_spines}, {"bundle_conns", res.bundle_conns}, {"bundle_lanes", res.bundle_lanes}, {"tunnels", res.tunnels}};
   if (!variant_rows.empty()) out.summary["variants"] = std::move(variant_rows);
   {  // Stage 2B #18: where the job's wall time went, plus the process peak RSS. `other` is the residual

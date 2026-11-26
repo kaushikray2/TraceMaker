@@ -7036,6 +7036,30 @@ struct Router::Impl {
       pad_vreserved[static_cast<std::size_t>(pad)].clear();
     }
   }
+  // Issue 39: the corridors of pads no routed connection used are given back. A reservation is a hard block for
+  // every other net, and release_escapes only fires for a pad whose connections all routed - so a pin whose
+  // connections stay open holds its corridor against the whole board through every negotiation pass, even when
+  // the connection fails for congestion far from the pin or will enter from its other end. After the first pass
+  // the corridor has had its chance: pads with no routed connection release theirs (via reservations with them,
+  // through release_pad), and their connections compete for the freed cells like everyone else. pad_plan is
+  // untouched, so escape_persist can still reclaim a released pad's cells when a rip-up asks for them.
+  void release_open_escapes() {
+    if (reserve.empty()) return;
+    std::vector<char> served(b.pads.size(), 0);
+    std::vector<NetId> pad_net(b.pads.size(), 0);
+    for (const auto& st : cs) {
+      for (int pad : {st.c.pad_a, st.c.pad_b}) {
+        if (pad < 0) continue;
+        pad_net[static_cast<std::size_t>(pad)] = st.c.net;
+        if (st.routed) served[static_cast<std::size_t>(pad)] = 1;
+      }
+    }
+    for (std::size_t pad = 0; pad < b.pads.size(); ++pad) {
+      if (served[pad] || pad_reserved[pad].empty() || pad_net[pad] <= 0) continue;
+      release_pad(static_cast<int>(pad), pad_net[pad]);
+      ++res.escape_released_open;
+    }
+  }
   // A pin whose connections are all routed no longer needs its corridor.
   void release_escapes(int ci) {
     if (reserve.empty()) return;
@@ -7565,6 +7589,7 @@ struct Router::Impl {
     int run_best = -1, run_best_pass = 0;  // best routed count since this restart began, and the pass that set it
     for (int pass = 0; pass < opt.max_passes && !pending.empty() && !out_of_budget(); ++pass) {
       res.passes = pass + 1;
+      if (pass == 1 && opt.escape_release_open) release_open_escapes();  // issue 39: still-open pins give their corridors back
       strict_pass = pass == 0 && opt.strict_first && !opt.warm;
       if (opt.fanout_hold && !pad_stub.empty()) {
         if (strict_pass) place_holds();
