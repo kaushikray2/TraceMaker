@@ -2898,6 +2898,8 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
       const auto proof = prove_board(best_tmp);
       if (!proof || !proof->contains("proved")) break;
       const int walled_before = proof->value("walled_in", 0);
+      best_walled = walled_before;      // the proof ran: its price is the finish price even if the round is discarded (issue 48)
+      best_walled_proved = true;
       std::set<std::pair<int, int>> rip;  // (kind, board index)
       for (const auto& pe : (*proof)["proved"])
         for (const auto& wi : pe["wall_items"]) {
