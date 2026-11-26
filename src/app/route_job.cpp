@@ -2982,8 +2982,8 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
   best->summary["stopped_early"] = any_stopped_early;
   best->summary["kb_used"] = any_kb_used;
   best->summary["deterministic"] = all_deterministic;
-  if (guard_walls && best_walled_proved) best->summary["finish"]["walled_in"] = best_walled;
-  if (guard_walls && !best_walled_proved)
+  if ((guard_walls || rip_walls) && best_walled_proved) best->summary["finish"]["walled_in"] = best_walled;
+  if ((guard_walls || rip_walls) && !best_walled_proved)
     log("finish: walled_in omitted from the summary: no wall proof of the final board could be computed");
   best->summary["run"]["output"] = final_out;
   best->summary["run"]["input"] = job.in;
