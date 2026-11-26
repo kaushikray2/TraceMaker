@@ -2703,8 +2703,9 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
   bool best_fit = false;            // the best board was produced under rules fitted from the input (a kept fit rung)
   // A wall proof over a board file itself: a minimal route job whose why_open classifies the board's own open
   // pins against its own copper, at its own layer count. Used after a kept chains rung -- the one rung kind that
-  // changes the best board without running a route, so no rung summary carries its walls (hardening #8).
-  auto prove_walls = [&](const std::string& board_file) -> std::optional<int> {
+  // changes the best board without running a route, so no rung summary carries its walls (hardening #8) -- and
+  // by the rip-walls phase, which needs the proved entries themselves, not just the count.
+  auto prove_board = [&](const std::string& board_file) -> std::optional<nlohmann::json> {
     RouteJob pj = job;
     const std::string proof_out = stem.string() + ".proof.kicad_pcb";
     pj.in = board_file;
@@ -2724,12 +2725,33 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
     // job-level fit_rules_from already rides along in the copy and is left alone, as the rungs leave it.
     if (best_fit && pj.fit_rules_from.empty()) pj.fit_rules_from = job.in;
     pj.opt.work_budget = 1;
+    // A proof is minimal and invisible: none of the run search shaping rides along in the copy. Left in,
+    // --relax would ignore the work budget (the relax path runs on round_work x rounds, not work_budget),
+    // --heartbeat would rewrite the progress file mid-finish with the proof state, and the scoped-reroute
+    // and pour lists would re-apply to a board that is only being measured.
+    pj.opt.relax = false;
+    pj.opt.rounds = 0;
+    pj.opt.round_work = 0;
+    pj.opt.halving = false;
+    pj.variants = 1;
+    pj.deterministic_mode = false;
+    pj.heartbeat_out.clear();
+    pj.reroute_nets.clear();
+    pj.reroute_window.clear();
+    pj.pours.clear();
     pj.log = nullptr;
     RouteJobResult pr = run_route_job(std::move(pj));
     remove_tmp(proof_out);
-    if (pr.summary.contains("why_open")) return pr.summary["why_open"].value("walled_in", 0);
-    if (pr.result.connections > 0 && pr.result.routed >= pr.result.connections) return 0;
+    if (pr.summary.contains("why_open")) return pr.summary["why_open"];
+    if (pr.result.connections > 0 && pr.result.routed >= pr.result.connections)
+      return nlohmann::json{{"walled_in", 0}, {"proved", nlohmann::json::array()}};
     return std::nullopt;
+  };
+  // The walled count alone (the chains rung re-pricing, above).
+  auto prove_walls = [&](const std::string& board_file) -> std::optional<int> {
+    const auto p = prove_board(board_file);
+    if (!p) return std::nullopt;
+    return p->value("walled_in", 0);
   };
   bool any_time_limited = false, any_kb_used = false, all_deterministic = true, any_stopped_early = false;  // over every rung tried
   for (std::size_t k = 0; k < rungs.size(); ++k) {
@@ -2864,33 +2886,8 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
   // is never ripped), and routes the opened connections on top; a round is kept only when open + walled improves,
   // the guard price. At most 4 rounds; a round that frees nothing or wins nothing ends the phase.
   if (rip_walls && best && best_open > 0) {
-    auto prove_full = [&](const std::string& board_file) -> std::optional<nlohmann::json> {
-      RouteJob pj = job;
-      const std::string proof_out = stem.string() + ".proof.kicad_pcb";
-      pj.in = board_file;
-      pj.out = proof_out;
-      pj.json_out.clear();
-      pj.items_out.clear();
-      pj.hold = false;
-      pj.reroute = false;
-      pj.warm_pcb.clear();
-      pj.copper_layers = 0;
-      pj.repair = "off";
-      pj.rescue = false;
-      pj.why_open = true;
-      pj.why_open_output = false;
-      if (best_fit && pj.fit_rules_from.empty()) pj.fit_rules_from = job.in;
-      pj.opt.work_budget = 1;
-      pj.log = nullptr;
-      RouteJobResult pr = run_route_job(std::move(pj));
-      remove_tmp(proof_out);
-      if (pr.summary.contains("why_open")) return pr.summary["why_open"];
-      if (pr.result.connections > 0 && pr.result.routed >= pr.result.connections)
-        return nlohmann::json{{"walled_in", 0}, {"proved", nlohmann::json::array()}};
-      return std::nullopt;
-    };
     for (int round = 1; round <= 4 && best_open > 0; ++round) {
-      const auto proof = prove_full(best_tmp);
+      const auto proof = prove_board(best_tmp);
       if (!proof || !proof->contains("proved")) break;
       const int walled_before = proof->value("walled_in", 0);
       std::set<std::pair<int, int>> rip;  // (kind, board index)
