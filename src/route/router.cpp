@@ -599,6 +599,25 @@ struct Router::Impl {
   bool force_escapes = false; // escalation rung: off-lattice escapes even when the pad has lattice exits
   Coord class_width(NetId net) const { return std::max(netclass(net).track_width, rules.minimums.track_width); }
   Coord track_width(NetId net) const { return width_override > 0 ? width_override : class_width(net); }
+  // The width on one layer (issue 37, 3C-1): the class's per-layer map (component rules solve a
+  // narrower track on inner layers for the same impedance) wins over the scalar; a tuning profile's
+  // per-layer width is next; the scalar class width is the fallback for unlisted layers. The
+  // neck-down override still wins over everything, as it does for track_width. A mapped width is a
+  // routing target, never below the board minimum.
+  Coord width_on(NetId net, int layer) const {
+    if (width_override > 0) return width_override;
+    const auto& nc = netclass(net);
+    if (!nc.track_width_on.empty()) {
+      if (const auto it = nc.track_width_on.find(b.copper_name(layer)); it != nc.track_width_on.end())
+        return std::max(it->second, rules.minimums.track_width);
+    }
+    // A differential profile keeps its established treatment (route_job: pairs routed at one
+    // layer geometry and kept off the other layers), so only single-ended profiles apply here.
+    if (const auto* prof = rules.profile_of(nc); prof && !prof->differential) {
+      if (const Coord w = prof->width_on(b.copper_name(layer)); w > 0) return std::max(w, rules.minimums.track_width);
+    }
+    return class_width(net);
+  }
   // Narrowest legal width to fall back to: the board minimum (KiCad's track_width rule), but not below 0.15 mm
   // unless the board minimum itself is smaller and non-zero.
   Coord neck_width(NetId net) const {
@@ -1182,7 +1201,11 @@ struct Router::Impl {
     const Coord key = track_width(net) * 2 + (via_override ? 1 : 0);  // all that changes the cache of one net
     if (net == cc_net && key == cc_key) return *cc_last;
     const auto& nc = netclass(net);
-    auto& cc = caches[{class_names_seen ? &nc : nullptr, nc.clearance, nc.diff_pair_gap, nc.tuning_pair_gap, track_width(net), via_diameter(net), via_drill(net)}];
+    // A class carrying per-layer maps (issue 37) keeps its own cache even when its scalars match
+    // another class's: its codes are computed per layer from the map, so sharing by scalar values
+    // would mix two different legality pictures.
+    const bool per_class = class_names_seen || !nc.track_width_on.empty() || !nc.diff_pair_width_on.empty() || !nc.diff_pair_gap_on.empty();
+    auto& cc = caches[{per_class ? &nc : nullptr, nc.clearance, nc.diff_pair_gap, nc.tuning_pair_gap, track_width(net), via_diameter(net), via_drill(net)}];
     if (cc.margin.empty()) {
       const std::size_t n = static_cast<std::size_t>(nl) * static_cast<std::size_t>(nx) * static_cast<std::size_t>(ny);
       cc.margin.init(n, &cache_bytes);
@@ -1705,7 +1728,6 @@ struct Router::Impl {
     if (opt.field_prefill && !cc.prefilled && static_cast<std::size_t>(nx) * static_cast<std::size_t>(ny) * static_cast<std::size_t>(nl) <= 4'000'000) {
       // The same codes the searches would compute one cell at a time (same functions, same arguments), computed up front.
       cc.prefilled = true;
-      const Coord twidth = track_width(net) / 2;
       const Coord vmargin = pitch * 71 / 100 + 1;
       for (int gy = 0; gy < ny; ++gy)
         for (int gx = 0; gx < nx; ++gx) {
@@ -1718,7 +1740,7 @@ struct Router::Impl {
           for (int l = 0; l < nl; ++l) {
             const std::size_t gi = (static_cast<std::size_t>(l) * static_cast<std::size_t>(ny) + static_cast<std::size_t>(gy)) * static_cast<std::size_t>(nx) + static_cast<std::size_t>(gx);
             if (cc.tight[gi] == INT32_MIN) {
-              cc.tight[gi] = obs->fixed_code(p, l, twidth, 0, cc.rep);
+              cc.tight[gi] = obs->fixed_code(p, l, width_on(net, l) / 2, 0, cc.rep);
               ++wc().fixed_checks;
             }
           }
@@ -1867,7 +1889,7 @@ struct Router::Impl {
   // window edge. Uses the search's generation, target marks and legality caches.
   // A pad-to-plane search (zone_tgt set, --plane-informed) has no target cells to flood back from: only the forward flood runs, and it
   // meets the target when it enters a cell the search would accept as the plane (the same lazy test). Its running out is the proof.
-  int late_reach_proof(const Connection& c, const Window& w, const Endpoint& src, const Endpoint& dst, Coord hw, Coord vd, Coord vdrill, bool& proved_edge,
+  int late_reach_proof(const Connection& c, const Window& w, const Endpoint& src, const Endpoint& dst, Coord vd, Coord vdrill, bool& proved_edge,
                        const std::function<bool(int, std::int64_t)>& zone_tgt = {}) {
     const bool zmode = static_cast<bool>(zone_tgt);
     const NetId net = c.net;
@@ -1924,7 +1946,7 @@ struct Router::Impl {
           if (ncx < 0 || ncy < 0 || ncx >= w.w || ncy >= w.h) continue;
           const std::size_t ni = static_cast<std::size_t>(l) * cells + static_cast<std::size_t>(ncy) * static_cast<std::size_t>(w.w) + static_cast<std::size_t>(ncx);
           if (rstamp[ni] == gen) continue;
-          if (tgt_of(ni) != 1 && cell_cost(w, l, ncx, ncy, net, hw) < 0) continue;
+          if (tgt_of(ni) != 1 && cell_cost(w, l, ncx, ncy, net, width_on(net, l) / 2) < 0) continue;
           reach(ni);
         }
         if (!met && nl > 1) {
@@ -1951,7 +1973,7 @@ struct Router::Impl {
           bstamp[ni] = gen;
           reach_bq.push_back(ni);
         };
-        if (is_tgt || cell_cost(w, l, cx, cy, net, hw) >= 0)  // a planar move may enter it: from any neighbour
+        if (is_tgt || cell_cost(w, l, cx, cy, net, width_on(net, l) / 2) >= 0)  // a planar move may enter it: from any neighbour
           for (int d = 0; d < 8 && !met; ++d) {
             const int ncx = cx + kDx[d], ncy = cy + kDy[d];
             if (ncx < 0 || ncy < 0 || ncx >= w.w || ncy >= w.h) continue;
@@ -2205,7 +2227,7 @@ struct Router::Impl {
           if (ncx < 0 || ncy < 0 || ncx >= w.w || ncy >= w.h) continue;
           const std::size_t ni = static_cast<std::size_t>(l) * cells + static_cast<std::size_t>(ncy) * static_cast<std::size_t>(w.w) + static_cast<std::size_t>(ncx);
           if (rstamp[ni] == gen) continue;
-          if (tgt_of(ni) != 1 && cell_cost(w, l, ncx, ncy, net, hw) < 0) continue;
+          if (tgt_of(ni) != 1 && cell_cost(w, l, ncx, ncy, net, width_on(net, l) / 2) < 0) continue;
           rstamp[ni] = gen;
           reach_q.push_back(ni);
         }
@@ -2457,9 +2479,9 @@ struct Router::Impl {
     bool proved_edge = false;  // that region touched the window edge
     auto run_late_proof = [&] {
       if (zone_proof)
-        proved = late_reach_proof(c, w, src, dst, hw, vd, vdrill, proved_edge, [&](int l, std::int64_t ci) { return target(l, ci); });
+        proved = late_reach_proof(c, w, src, dst, vd, vdrill, proved_edge, [&](int l, std::int64_t ci) { return target(l, ci); });
       else
-        proved = late_reach_proof(c, w, src, dst, hw, vd, vdrill, proved_edge);
+        proved = late_reach_proof(c, w, src, dst, vd, vdrill, proved_edge);
     };
     while (!open.empty()) {
       const std::int64_t f = open.top().first;
@@ -2540,12 +2562,12 @@ struct Router::Impl {
         const bool tgt = is_target[static_cast<std::size_t>(l) * cells + static_cast<std::size_t>(nci)] == 1;
         std::int64_t extra = 0;
         if (!tgt) {
-          extra = cell_cost(w, l, ncx, ncy, net, hw);
+          extra = cell_cost(w, l, ncx, ncy, net, width_on(net, l) / 2);
           if (extra < 0) continue;
         } else {
           extra = textra(static_cast<std::size_t>(l) * cells + static_cast<std::size_t>(nci));
         }
-        if (coupled_net && obs->coupling_state(at(w.x0 + cx, w.y0 + cy), at(w.x0 + ncx, w.y0 + ncy), l, 2 * hw, net, soft, nullptr) == 2) continue;
+        if (coupled_net && obs->coupling_state(at(w.x0 + cx, w.y0 + cy), at(w.x0 + ncx, w.y0 + ncy), l, width_on(net, l), net, soft, nullptr) == 2) continue;
         std::int64_t cost = on_layer((d & 1) ? diag : step, l) + extra;
         if (dir_pen > 0 && !(d & 1)) {  // against the layer's preferred direction (doc 16; per layer by name: D174)
           const int pref = layer_pref(l);
@@ -2673,7 +2695,7 @@ struct Router::Impl {
           if (stamp_lc != gen) continue;
           if (state_lc != 2) continue;
           if (learned_block.contains(block_owner(net), cell_key(l, gx, gy))) ++learned;
-          else if (obs->disk_state(at(gx, gy), l, hw, net, 0, true) == 2) {
+          else if (obs->disk_state(at(gx, gy), l, width_on(net, l) / 2, net, 0, true) == 2) {
             ++fixed;
             if (std::getenv("TM_DEBUG_ENCLOSED")[0] == '2' && fixed % 8 == 0)
               std::fprintf(stderr, "  blocked cell L%d (%.3f, %.3f)\n", l, nm_to_mm(at(gx, gy).x), nm_to_mm(at(gx, gy).y));
@@ -2775,12 +2797,12 @@ struct Router::Impl {
     auto on_pad = [&](Point q, int pad, int lay) { return on_pad_copper(q, pad, lay); };
     if (merged.size() >= 2) {
       const auto& f = merged.front();
-      if (f.a == pa && on_pad(f.b, c.pad_a, f.layer) && obs->segment_state(f.a, f.b, f.layer, width, net, true, nullptr) == 2)
+      if (f.a == pa && on_pad(f.b, c.pad_a, f.layer) && obs->segment_state(f.a, f.b, f.layer, width_on(net, f.layer), net, true, nullptr) == 2)
         merged.erase(merged.begin());
     }
     if (merged.size() >= 2 && c.pad_b >= 0) {
       const auto& l = merged.back();
-      if (l.b == pb && on_pad(l.a, c.pad_b, l.layer) && obs->segment_state(l.a, l.b, l.layer, width, net, true, nullptr) == 2) merged.pop_back();
+      if (l.b == pb && on_pad(l.a, c.pad_b, l.layer) && obs->segment_state(l.a, l.b, l.layer, width_on(net, l.layer), net, true, nullptr) == 2) merged.pop_back();
     }
     // Vias in pad where the path starts or ends on a layer the pad is not on (only offered by add_in_pad).
     std::vector<Point> pad_vias;
@@ -2800,13 +2822,13 @@ struct Router::Impl {
       if (obs->via_state(v, in_pad_diameter(), in_pad_drill(), net, 0, soft, &victims) == 2) ok = false;
     obs->set_pad_via_exempt(false);
     for (const auto& s : merged) {
-      const int st = obs->segment_state(s.a, s.b, s.layer, width, net, soft, &victims);
+      const int st = obs->segment_state(s.a, s.b, s.layer, width_on(net, s.layer), net, soft, &victims);
       if (st == 2) {
         ok = false;
         if (std::getenv("TM_DEBUG_EXACT"))
           std::fprintf(stderr, "EXACT %s conn %d soft %d: (%.4f,%.4f)-(%.4f,%.4f) L%d w %.3f\n", b.nets[static_cast<std::size_t>(net)].name.c_str(), current,
                        soft ? 1 : 0, nm_to_mm(s.a.x), nm_to_mm(s.a.y), nm_to_mm(s.b.x), nm_to_mm(s.b.y), s.layer, nm_to_mm(width));
-        learn_block(c, s, width);
+        learn_block(c, s, width_on(net, s.layer));
       }
     }
     // Each via is a through via where that is legal, else (boards that allow them) a blind/buried via over its span.
@@ -2907,7 +2929,7 @@ struct Router::Impl {
     // Commit.
     auto& st = cs[static_cast<std::size_t>(current)];
     for (const auto& s : merged) {
-      model::Track t{s.a, s.b, width, s.layer, net, false, sexpr::kNoNode};
+      model::Track t{s.a, s.b, width_on(net, s.layer), s.layer, net, false, sexpr::kNoNode};
       b.tracks.push_back(t);
       const int id = static_cast<int>(b.tracks.size() - 1);
       st.items.push_back(obs->add_track(id, current));
@@ -2986,7 +3008,7 @@ struct Router::Impl {
     for (int k = 0; k <= n; ++k) {
       const Point q{s.a.x + (s.b.x - s.a.x) * k / n, s.a.y + (s.b.y - s.a.y) * k / n};
       std::vector<int> owners;
-      if (obs->disk_state(q, s.layer, track_width(net) / 2, net, 0, true, &owners) == 1) {
+      if (obs->disk_state(q, s.layer, width_on(net, s.layer) / 2, net, 0, true, &owners) == 1) {
         auto& h = history[static_cast<std::uint64_t>(cell_key(s.layer, to_ix(q.x), to_iy(q.y)))];
         if (h < 60000) h = static_cast<std::uint16_t>(h + 1);
       }

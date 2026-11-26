@@ -169,3 +169,5 @@ add_test(NAME daemon_cli COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration
 set_tests_properties(daemon_cli PROPERTIES LABELS "integration;session" TIMEOUT 600)
 add_test(NAME live_status COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration/live_status.py $<TARGET_FILE:tracemaker> ${CMAKE_BINARY_DIR}/integration/live_status)
 set_tests_properties(live_status PROPERTIES LABELS "integration" TIMEOUT 120)
+add_test(NAME perlayer_widths COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration/perlayer_widths.py $<TARGET_FILE:tracemaker> ${CMAKE_BINARY_DIR}/integration/perlayer)
+set_tests_properties(perlayer_widths PROPERTIES LABELS "route;integration" TIMEOUT 300)
