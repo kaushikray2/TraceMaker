@@ -14,6 +14,7 @@
 #include <string>
 
 #include "analysis/escape_proof.hpp"
+#include "drc/copper.hpp"
 #include "io/kicad/board_reader.hpp"
 #include "io/kicad/project_reader.hpp"
 #include "io/srj/srj.hpp"
@@ -119,4 +120,37 @@ TEST_CASE("escape proof: a ring with 0.4 mm gaps does not enclose the pin", "[es
   CHECK(e.analysed);
   CHECK_FALSE(e.enclosed);
   CHECK_FALSE(e.soft_only);
+}
+
+TEST_CASE("escape proof: a pin walled in by routed tracks names the tracks", "[escape_proof]") {
+  Ring r = make_ring(1.1);  // the pad ring alone leaves 0.4 mm gaps: the pin is not enclosed by pads
+  REQUIRE_FALSE(analysis::EscapeAnalyser(r.b, r.rules).run(r.pin).enclosed);
+  const int pin_net = static_cast<int>(r.b.pads[static_cast<std::size_t>(r.pin)].net);
+  int other = -1;
+  for (const auto& pd : r.b.pads)
+    if (static_cast<int>(pd.net) != pin_net && pd.net != 0) { other = static_cast<int>(pd.net); break; }
+  REQUIRE(other > 0);
+  // A closed square of tracks of another net around the pin: the only walls are routed copper.
+  const Coord h = mm_to_nm(0.45), w = mm_to_nm(0.3);
+  auto seg = [&](Coord x0, Coord y0, Coord x1, Coord y1) {
+    model::Track t;
+    t.a = {x0, y0};
+    t.b = {x1, y1};
+    t.width = w;
+    t.layer = 0;
+    t.net = static_cast<model::NetId>(other);
+    r.b.tracks.push_back(t);
+  };
+  seg(-h, -h, h, -h);
+  seg(h, -h, h, h);
+  seg(h, h, -h, h);
+  seg(-h, h, -h, -h);
+  const auto e = analysis::EscapeAnalyser(r.b, r.rules).run(r.pin);
+  REQUIRE(e.enclosed);
+  REQUIRE(e.wall_items.size() == 4);
+  for (int i = 0; i < 4; ++i) {
+    CHECK(e.wall_items[static_cast<std::size_t>(i)].kind == static_cast<int>(drc::ItemKind::Track));
+    CHECK(e.wall_items[static_cast<std::size_t>(i)].index == i);
+    CHECK(e.wall_items[static_cast<std::size_t>(i)].net == other);
+  }
 }

@@ -44,6 +44,15 @@ struct PinEscape {
   bool soft_wall = false;            // zone fills, or net-less copper graphics on the pin, are among the walls
   bool soft_only = false;            // enclosed only while those block (route --soft-zones, --soft-copper-graphics would free it); not `enclosed`
   std::vector<std::string> walls;    // what bounds the space: pads ("U3.6"), "the GND zone fill", "the board edge" (nearest first, at most 6)
+  // The walling items that are routed copper (tracks, arcs, vias), identified by board index: what a rip-up
+  // may remove to free the pin. Fixed copper (pads, zones, graphics, holes, the board edge) is never listed.
+  // Sorted by (kind, index), duplicates removed.
+  struct WallItem {
+    int kind = 0;    // drc::ItemKind value: Track, Arc or Via
+    int index = -1;  // index into the board vector of that kind (tracks / arcs / vias)
+    int net = 0;     // the item net (model::NetId)
+  };
+  std::vector<WallItem> wall_items;
   std::string text;                  // one sentence for the user
 };
 

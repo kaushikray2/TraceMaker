@@ -31,6 +31,7 @@ struct Wall {
   std::string what;  // for the user: "U3.6", "the GND zone fill", "the board edge"
   bool zone = false;
   Point pos;         // where it is, to list the nearest first
+  const drc::CopperItem* item = nullptr;  // the copper item behind the wall (nullptr: an unowned hole, the board edge)
 };
 
 // The grid around one pin: a cell is blocked when its centre is closer to a wall than `keep - slack`.
@@ -146,14 +147,14 @@ struct EscapeAnalyser::Impl {
         default: what = "a " + nn + " track"; break;
       }
       const bool soft_wall = it.kind == drc::ItemKind::Zone || (it.kind == drc::ItemKind::Graphic && it.net == 0 && pin && touches(*pin, it));
-      for (const auto& s : it.shapes) out.push_back({&s, keep, what, soft_wall, it.pos});
+      for (const auto& s : it.shapes) out.push_back({&s, keep, what, soft_wall, it.pos, &it});
     }
     for (const auto& h : cm.holes) {
       if (h.removed || (h.net == net && h.net != 0)) continue;
       const drc::CopperItem* owner = h.item >= 0 ? &cm.items[static_cast<std::size_t>(h.item)] : nullptr;
       Coord keep = width / 2 + re.hole_clearance(owner, probe, layer);
       if (via) keep = std::max(keep, drill / 2 + rules.minimums.hole_to_hole);  // the via's own hole against this one
-      out.push_back({&h.shape, keep, h.pad >= 0 ? pad_label(b, h.pad) + "'s hole" : std::string("a hole"), false, h.pos});
+      out.push_back({&h.shape, keep, h.pad >= 0 ? pad_label(b, h.pad) + "'s hole" : std::string("a hole"), false, h.pos, owner});
     }
     for (const auto* list : {&cm.edges, &cm.margins})
       for (const auto& e : *list) out.push_back({&e, width / 2 + re.edge_clearance(probe, layer), "the board edge", false, e.pts.empty() ? Point{} : e.pts[0]});
@@ -289,6 +290,7 @@ PinEscape EscapeAnalyser::Impl::analyse(int pad, bool soft) const {
     int out_layer = -1;
     std::vector<int> layers;
     std::map<std::string, std::pair<LD, bool>> walls;  // what -> (distance from the pin, a soft wall)
+    std::vector<const drc::CopperItem*> items;         // the routed-copper items behind the walls (tracks, arcs, vias)
   };
   auto walled = [&](Coord w, Coord via_d, Coord drill, bool want_walls) {
     Walled res;
@@ -317,6 +319,9 @@ PinEscape EscapeAnalyser::Impl::analyse(int pad, bool soft) const {
               const LD d = std::hypot(LD(wl.pos.x - P.pos.x), LD(wl.pos.y - P.pos.y));
               auto it = res.walls.find(wl.what);
               if (it == res.walls.end() || d < it->second.first) res.walls[wl.what] = {d, wl.zone};
+              if (wl.item && wl.item->kind != drc::ItemKind::Pad && wl.item->kind != drc::ItemKind::Zone && wl.item->kind != drc::ItemKind::Graphic &&
+                  std::find(res.items.begin(), res.items.end(), wl.item) == res.items.end())
+                res.items.push_back(wl.item);
             }
           }
       if (!via_grid_built) {  // cells where the via keeps its clearances on every copper layer
@@ -367,6 +372,9 @@ PinEscape EscapeAnalyser::Impl::analyse(int pad, bool soft) const {
   }
   std::sort(walls.begin(), walls.end());
   for (std::size_t k = 0; k < walls.size() && k < 6; ++k) r.walls.push_back(walls[k].second);
+  for (const drc::CopperItem* it : at_class.items) r.wall_items.push_back({static_cast<int>(it->kind), it->index, static_cast<int>(it->net)});
+  std::sort(r.wall_items.begin(), r.wall_items.end(), [](const PinEscape::WallItem& x, const PinEscape::WallItem& y) { return x.kind != y.kind ? x.kind < y.kind : x.index < y.index; });
+  r.wall_items.erase(std::unique(r.wall_items.begin(), r.wall_items.end(), [](const PinEscape::WallItem& x, const PinEscape::WallItem& y) { return x.kind == y.kind && x.index == y.index; }), r.wall_items.end());
 
   // A class's track width and via size are defaults, not limits: the proof holds only for the board's minimum track and via
   // (KiCad's DRC checks those; 10 um when the board sets none).

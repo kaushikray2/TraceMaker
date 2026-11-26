@@ -2255,8 +2255,13 @@ RouteJobResult run_route_job(RouteJob job) {
       log("  cannot connect: " + e.text);
       nlohmann::json walls = nlohmann::json::array();
       for (const auto& w : e.walls) walls.push_back(w);
+      nlohmann::json wis = nlohmann::json::array();
+      for (const auto& wi : e.wall_items) {
+        const std::string wn = wi.net > 0 && static_cast<std::size_t>(wi.net) < lb.board.nets.size() ? lb.board.nets[static_cast<std::size_t>(wi.net)].name : std::string();
+        wis.push_back({{"kind", drc::kind_name(static_cast<drc::ItemKind>(wi.kind))}, {"index", wi.index}, {"net", wn}});
+      }
       proved.push_back({{"pin", analysis::pad_label(lb.board, p)}, {"net", lb.board.nets[static_cast<std::size_t>(lb.board.pads[static_cast<std::size_t>(p)].net)].name},
-                        {"width_mm", nm_to_mm(e.width)}, {"via_in_pad_fits", e.via_in_pad_fits}, {"walls", walls},
+                        {"width_mm", nm_to_mm(e.width)}, {"via_in_pad_fits", e.via_in_pad_fits}, {"walls", walls}, {"wall_items", wis},
                         {"text", e.text}});
     }
     const double why_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_why).count();
