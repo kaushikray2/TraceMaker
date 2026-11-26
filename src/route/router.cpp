@@ -1408,7 +1408,7 @@ struct Router::Impl {
     }
     if (!vreserve.empty()) {
       const std::int32_t r = vreserve[static_cast<std::size_t>(w.y0 + cy) * static_cast<std::size_t>(nx) + static_cast<std::size_t>(w.x0 + cx)];
-      if (r != 0 && r != static_cast<std::int32_t>(net)) {
+      if (r > 0 && r != static_cast<std::int32_t>(net)) {  // contested cells (-1) are free, as in reserved_cost: an overlap of two via-keep strips blocks nobody (issue 44)
         if (!soft) return -1;
         extra = std::max(extra, reserve_pen);
       }
