@@ -74,6 +74,8 @@ add_test(NAME chains_clique COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integrat
 set_tests_properties(chains_clique PROPERTIES SKIP_RETURN_CODE 77 LABELS "route;integration" TIMEOUT 1200 PROCESSORS 8)
 add_test(NAME chains_arcs COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration/chains_arcs.py $<TARGET_FILE:tracemaker> ${CMAKE_BINARY_DIR}/integration/chains_arcs)
 set_tests_properties(chains_arcs PROPERTIES LABELS "route;integration" TIMEOUT 300)
+add_test(NAME chains_clique_pair COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration/chains_clique_pair.py $<TARGET_FILE:tracemaker> ${CMAKE_BINARY_DIR}/integration/chains_clique_pair)
+set_tests_properties(chains_clique_pair PROPERTIES LABELS "route;integration" TIMEOUT 300)
 add_test(NAME reroute_scope COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration/reroute_scope.py $<TARGET_FILE:tracemaker> ${CMAKE_BINARY_DIR}/integration/reroute_scope)
 add_test(NAME batch_mode COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration/batch_mode.py $<TARGET_FILE:tracemaker> ${CMAKE_BINARY_DIR}/integration/batch_mode)
 set_tests_properties(batch_mode PROPERTIES SKIP_RETURN_CODE 77 LABELS "route;integration" TIMEOUT 900 PROCESSORS 8)
