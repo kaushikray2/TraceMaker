@@ -303,6 +303,8 @@ PinEscape EscapeAnalyser::Impl::analyse(int pad, bool soft) const {
     Walled res;
     Grid via_ok;
     bool via_grid_built = false;
+    std::vector<Grid> via_layer_grids;               // the via blockage of each layer on its own, so a blocked via can name its blockers
+    std::vector<std::vector<Wall>> via_layer_walls;  // the walls behind via_layer_grids, per layer
     for (int L = 0; L < nl; ++L) {
       if (!(pin.layers & model::layer_bit(L))) continue;
       res.any_layer = true;
@@ -333,9 +335,17 @@ PinEscape EscapeAnalyser::Impl::analyse(int pad, bool soft) const {
           }
       if (!via_grid_built) {  // cells where the via keeps its clearances on every copper layer
         via_ok = m.grid_around(P.pos, pin);
+        via_layer_grids.clear();
+        via_layer_walls.clear();
         for (int V = 0; V < nl; ++V) {
-          const auto vs = m.walls(P.net, V, via_d, true, m.box_of(via_ok), soft, &pin, drill);
-          for (std::size_t v = 0; v < vs.size(); ++v) mark(via_ok, *vs[v].shape, vs[v].keep, slack, static_cast<int>(v));
+          auto vs = m.walls(P.net, V, via_d, true, m.box_of(via_ok), soft, &pin, drill);
+          Grid gv = m.grid_around(P.pos, pin);
+          for (std::size_t v = 0; v < vs.size(); ++v) {
+            mark(gv, *vs[v].shape, vs[v].keep, slack, static_cast<int>(v));
+            mark(via_ok, *vs[v].shape, vs[v].keep, slack, static_cast<int>(v));
+          }
+          via_layer_walls.push_back(std::move(vs));
+          via_layer_grids.push_back(std::move(gv));
         }
         via_grid_built = true;
       }
@@ -354,6 +364,28 @@ PinEscape EscapeAnalyser::Impl::analyse(int pad, bool soft) const {
           res.via = true;
           break;
         }
+      if (!res.via && want_walls)  // no via fits either: name what blocks the via cells, layer by layer
+        for (int j = 0; j < g.n; ++j)
+          for (int i = 0; i < g.n; ++i) {
+            const int k = g.at(i, j);
+            if (!f.reached[static_cast<std::size_t>(k)] || via_ok.owner[static_cast<std::size_t>(k)] < 0) continue;
+            const Point c = g.centre(i, j);
+            bool in_pad = false;
+            for (const auto& sh : pin.shapes)
+              if (sh.closed && sh.pts.size() > 2 && geom::point_in_polygon(c, sh.pts)) in_pad = true;
+            if (in_pad && !m.opt.via_in_pad) continue;
+            for (int V = 0; V < nl; ++V) {
+              const int o = via_layer_grids[static_cast<std::size_t>(V)].owner[static_cast<std::size_t>(k)];
+              if (o < 0) continue;
+              const Wall& wl = via_layer_walls[static_cast<std::size_t>(V)][static_cast<std::size_t>(o)];
+              const LD d = std::hypot(LD(wl.pos.x - P.pos.x), LD(wl.pos.y - P.pos.y));
+              auto it = res.walls.find(wl.what);
+              if (it == res.walls.end() || d < it->second.first) res.walls[wl.what] = {d, wl.zone};
+              if (wl.item && wl.item->kind != drc::ItemKind::Pad && wl.item->kind != drc::ItemKind::Zone && wl.item->kind != drc::ItemKind::Graphic &&
+                  std::find(res.items.begin(), res.items.end(), wl.item) == res.items.end())
+                res.items.push_back(wl.item);
+            }
+          }
       if (res.via) return res;
     }
     return res;

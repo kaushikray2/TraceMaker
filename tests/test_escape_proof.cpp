@@ -7,7 +7,9 @@
 //  - pitch 1.1 mm: gaps of 0.4 mm, the pin is not walled in at all.
 // Modifications Copyright (C) 2026 SiliconBrane Inc.
 // Modified 2026 as part of the SiliconBrane fork of TraceMaker:
-// added the wall_items proof test: a pin enclosed by four routed tracks names exactly those tracks.
+// added the wall_items proof tests: a pin enclosed by four routed tracks names exactly those tracks; a pin
+// enclosed by routed vias or arcs names them too; and a pin whose via escape is blocked by routed copper on
+// another layer names that copper (fixed items never appear).
 // The modifications are licensed under GPL-3.0-or-later, the same
 // terms as the original work. The original copyright notice above
 // remains in force for the original portions of this file.
@@ -160,4 +162,97 @@ TEST_CASE("escape proof: a pin walled in by routed tracks names the tracks", "[e
     CHECK(e.wall_items[static_cast<std::size_t>(i)].index == i);
     CHECK(e.wall_items[static_cast<std::size_t>(i)].net == other);
   }
+}
+
+TEST_CASE("escape proof: a pin walled in by routed vias names the vias", "[escape_proof]") {
+  Ring r = make_ring(1.1);  // the pad ring alone does not enclose the pin
+  REQUIRE_FALSE(analysis::EscapeAnalyser(r.b, r.rules).run(r.pin).enclosed);
+  const int pin_net = static_cast<int>(r.b.pads[static_cast<std::size_t>(r.pin)].net);
+  int other = -1;
+  for (const auto& pd : r.b.pads)
+    if (static_cast<int>(pd.net) != pin_net && pd.net != 0) { other = static_cast<int>(pd.net); break; }
+  REQUIRE(other > 0);
+  // Four routed vias on the axes around the pin: too close together for a track between them, and the pin's own
+  // via fits only inside its pad.
+  const Coord d = mm_to_nm(0.52);
+  const Coord zero = 0;
+  for (const auto& xy : {std::pair{d, zero}, std::pair{-d, zero}, std::pair{zero, d}, std::pair{zero, -d}}) {
+    model::Via v;
+    v.pos = {xy.first, xy.second};
+    v.size = mm_to_nm(0.45);
+    v.drill = mm_to_nm(0.22);
+    v.layer_top = 0;
+    v.layer_bottom = 1;
+    v.net = static_cast<model::NetId>(other);
+    r.b.vias.push_back(v);
+  }
+  const auto e = analysis::EscapeAnalyser(r.b, r.rules).run(r.pin);
+  REQUIRE(e.enclosed);
+  REQUIRE(e.wall_items.size() == 4);
+  for (int i = 0; i < 4; ++i) {
+    CHECK(e.wall_items[static_cast<std::size_t>(i)].kind == static_cast<int>(drc::ItemKind::Via));
+    CHECK(e.wall_items[static_cast<std::size_t>(i)].index == i);
+    CHECK(e.wall_items[static_cast<std::size_t>(i)].net == other);
+  }
+}
+
+TEST_CASE("escape proof: a pin walled in by routed arcs names the arcs", "[escape_proof]") {
+  Ring r = make_ring(1.1);
+  REQUIRE_FALSE(analysis::EscapeAnalyser(r.b, r.rules).run(r.pin).enclosed);
+  const int pin_net = static_cast<int>(r.b.pads[static_cast<std::size_t>(r.pin)].net);
+  int other = -1;
+  for (const auto& pd : r.b.pads)
+    if (static_cast<int>(pd.net) != pin_net && pd.net != 0) { other = static_cast<int>(pd.net); break; }
+  REQUIRE(other > 0);
+  // Two routed half-circle arcs of another net close the ring around the pin.
+  const Coord rad = mm_to_nm(0.5), zero = 0;
+  auto arc = [&](model::Point a, model::Point mid, model::Point b) {
+    model::ArcTrack t;
+    t.a = a;
+    t.mid = mid;
+    t.b = b;
+    t.width = mm_to_nm(0.3);
+    t.layer = 0;
+    t.net = static_cast<model::NetId>(other);
+    r.b.arcs.push_back(t);
+  };
+  arc({-rad, zero}, {zero, -rad}, {rad, zero});
+  arc({rad, zero}, {zero, rad}, {-rad, zero});
+  const auto e = analysis::EscapeAnalyser(r.b, r.rules).run(r.pin);
+  REQUIRE(e.enclosed);
+  REQUIRE(e.wall_items.size() == 2);
+  for (int i = 0; i < 2; ++i) {
+    CHECK(e.wall_items[static_cast<std::size_t>(i)].kind == static_cast<int>(drc::ItemKind::Arc));
+    CHECK(e.wall_items[static_cast<std::size_t>(i)].index == i);
+    CHECK(e.wall_items[static_cast<std::size_t>(i)].net == other);
+  }
+}
+
+TEST_CASE("escape proof: a via escape blocked by routed copper on another layer names it", "[escape_proof]") {
+  Ring r = make_ring(1.1);  // 0.4 mm gaps, 0.4 mm vias: a via fits beside the pin on the top layer
+  // No track gets out: the class track needs 0.25 + 2 x 0.1 mm in a 0.4 mm gap, and the board minimum is the
+  // same, so no neck-down exists either. What keeps the pin open is its via escape.
+  for (auto& cl : r.rules.classes) cl.track_width = mm_to_nm(0.25);
+  r.rules.minimums.track_width = mm_to_nm(0.25);
+  REQUIRE_FALSE(analysis::EscapeAnalyser(r.b, r.rules).run(r.pin).enclosed);  // the via escape is open
+  const int pin_net = static_cast<int>(r.b.pads[static_cast<std::size_t>(r.pin)].net);
+  int other = -1;
+  for (const auto& pd : r.b.pads)
+    if (static_cast<int>(pd.net) != pin_net && pd.net != 0) { other = static_cast<int>(pd.net); break; }
+  REQUIRE(other > 0);
+  // One routed track on the bottom layer under the pin: every via cell beside the pin sits over it.
+  model::Track t;
+  t.a = {-mm_to_nm(1.0), 0};
+  t.b = {mm_to_nm(1.0), 0};
+  t.width = mm_to_nm(1.2);
+  t.layer = 1;
+  t.net = static_cast<model::NetId>(other);
+  r.b.tracks.push_back(t);
+  const auto e = analysis::EscapeAnalyser(r.b, r.rules).run(r.pin);
+  REQUIRE(e.enclosed);
+  // Exactly the bottom track is named: the ring pads are fixed copper and never appear in wall_items.
+  REQUIRE(e.wall_items.size() == 1);
+  CHECK(e.wall_items[0].kind == static_cast<int>(drc::ItemKind::Track));
+  CHECK(e.wall_items[0].index == 0);
+  CHECK(e.wall_items[0].net == other);
 }
