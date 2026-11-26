@@ -316,7 +316,7 @@ Options:
   --pass-work INT:POSITIVE    Work budget of each after-route pass, in exact checks (default 2,000,000)
 
 
-Exit codes: 0 = every connection routed; 3 = the job ran but connections remain open (see open_connections in the route JSON); 1 = the job failed to run (unreadable board, refused configuration); 2 = usage error.
+Exit codes: 0 = every connection routed; 3 = the job ran but connections remain open (see open_connections in the route JSON); 1 = the job failed to run (unreadable board, refused configuration); 2 = usage error. Exit 3 has a second cause: with soft zones, the exit code is decided by what KiCad's zone refill would leave unconnected, so a job whose connections all routed can still exit 3 on pour fallout. The route JSON's exit_reason field says which cause decided the code: complete (exit 0), open_connections, or unconnected_after_refill.
 ```
 
 ### `tracemaker route-batch`

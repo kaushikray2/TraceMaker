@@ -198,6 +198,13 @@ struct RouteJobResult {
   int unconnected_after_refill = -1;  // with soft zones: what KiCad's refill would leave unconnected
   // 0 when everything planned was routed (and, with soft zones, nothing is unconnected after the refill).
   int exit_code() const { return unconnected_after_refill >= 0 ? (unconnected_after_refill == 0 ? 0 : 3) : result.routed == result.connections ? 0 : 3; }
+  // Why exit_code() is what it is (issue 43): exit 3 conflates connections the router left
+  // open with pours KiCad's zone refill would leave unconnected on an otherwise complete
+  // board. The route JSON summary carries this discriminator so callers can tell them apart.
+  const char* exit_reason() const {
+    if (unconnected_after_refill >= 0) return unconnected_after_refill == 0 ? "complete" : "unconnected_after_refill";
+    return result.routed == result.connections ? "complete" : "open_connections";
+  }
 };
 
 // Reads the board and its rules, routes (a portfolio when more than one variant runs), writes the requested outputs.

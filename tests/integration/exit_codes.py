@@ -74,6 +74,7 @@ def main():
     check(p.returncode == 0, f"complete: rc {p.returncode} != 0: {p.stderr[-500:]}")
     s = json.loads(js.read_text())
     check(s.get("exit_code") == 0, f"complete: summary exit_code {s.get('exit_code')} != 0")
+    check(s.get("exit_reason") == "complete", f"complete: summary exit_reason {s.get('exit_reason')} != complete")
     check(s.get("open_connections") == [], f"complete: open_connections not empty: {s.get('open_connections')}")
     print(f"complete: rc 0, {s['routed']}/{s['connections']} routed")
 
@@ -83,6 +84,8 @@ def main():
     check(p.returncode == 3, f"partial: rc {p.returncode} != 3: {p.stderr[-500:]}")
     s = json.loads(js.read_text())
     check(s.get("exit_code") == 3, f"partial: summary exit_code {s.get('exit_code')} != 3")
+    want_reason = "unconnected_after_refill" if (s.get("unconnected_after_refill") or 0) > 0 else "open_connections"
+    check(s.get("exit_reason") == want_reason, f"partial: summary exit_reason {s.get('exit_reason')} != {want_reason}")
     oc = s.get("open_connections")
     check(isinstance(oc, list) and len(oc) == s["connections"] - s["routed"] and len(oc) > 0,
           f"partial: open_connections does not match the open count: {oc}")

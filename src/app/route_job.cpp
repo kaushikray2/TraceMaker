@@ -2476,6 +2476,7 @@ RouteJobResult run_route_job(RouteJob job) {
     }
     out.summary["open_connections"] = std::move(open);
     out.summary["exit_code"] = out.exit_code();
+    out.summary["exit_reason"] = out.exit_reason();  // issue 43: which cause decided the exit code
     if (job.route_open_only) {
       out.summary["route_open_only"] = true;
       out.summary["open_at_start"] = res.connections;  // the input's ratsnest: connections is a property of the board as read, unchanged by the stages
