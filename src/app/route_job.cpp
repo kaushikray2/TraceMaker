@@ -2765,6 +2765,7 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
       const auto t0 = std::chrono::steady_clock::now();
       ChainsOptions co;
       co.seed = job.opt.seed;
+      co.threads = std::max(1, job.threads);  // the rung honours the job cap (issue 49)
       co.apply_out = tmp;
       const nlohmann::json cj = measure_chains(best_tmp, co, false);
       const auto& ap = cj["applied"];
