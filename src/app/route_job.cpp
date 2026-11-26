@@ -2820,6 +2820,8 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
     if (best && !rg.fresh) {
       j.in = best_tmp;
       j.reroute = false;  // what the rungs before routed stays
+      j.reroute_nets.clear();    // the scoped strip was consumed on the original board (issue 46)
+      j.reroute_window.clear();
       j.warm_pcb.clear();
     }
     if (rg.fit) {
@@ -2940,6 +2942,8 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
       j.items_out.clear();
       j.hold = false;
       j.reroute = false;
+      j.reroute_nets.clear();    // the heal routes the ripped board as it stands (issue 46)
+      j.reroute_window.clear();
       j.warm_pcb.clear();
       j.copper_layers = best_layers;
       if (best_masks) j.opt.soft_pad_masks = true;
