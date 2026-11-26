@@ -2947,7 +2947,7 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
       const auto t0 = std::chrono::steady_clock::now();
       RouteJobResult r = run_route_job(std::move(j));
       const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-      const int open = r.result.connections - r.result.routed;
+      const int open = r.unconnected_after_refill >= 0 ? r.unconnected_after_refill : r.result.connections - r.result.routed;
       const int walled = r.summary.contains("why_open") ? r.summary["why_open"].value("walled_in", 0) : 0;
       const bool kept = open + walled < best_open + walled_before || (open + walled == best_open + walled_before && open < best_open);
       rows.push_back({{"rung", fmt("rip walls round %d", round)}, {"open_before", best_open}, {"open_after", open},
