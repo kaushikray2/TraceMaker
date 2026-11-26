@@ -84,8 +84,11 @@ def main():
     check(p.returncode == 3, f"partial: rc {p.returncode} != 3: {p.stderr[-500:]}")
     s = json.loads(js.read_text())
     check(s.get("exit_code") == 3, f"partial: summary exit_code {s.get('exit_code')} != 3")
-    want_reason = "unconnected_after_refill" if (s.get("unconnected_after_refill") or 0) > 0 else "open_connections"
-    check(s.get("exit_reason") == want_reason, f"partial: summary exit_reason {s.get('exit_reason')} != {want_reason}")
+    # Issue 54: partial ran WITH --soft-zones and has genuine opens, so the reason is
+    # open_connections - the refill count also counts these very pads and must not turn
+    # the reason into unconnected_after_refill. (Before the fix this case asserted the
+    # buggy mirror of the refill count.)
+    check(s.get("exit_reason") == "open_connections", f"partial: summary exit_reason {s.get('exit_reason')} != open_connections")
     oc = s.get("open_connections")
     check(isinstance(oc, list) and len(oc) == s["connections"] - s["routed"] and len(oc) > 0,
           f"partial: open_connections does not match the open count: {oc}")

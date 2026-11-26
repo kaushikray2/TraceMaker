@@ -1668,6 +1668,11 @@ RouteJobResult run_route_job(RouteJob job) {
       if (kept) {
         res.tracks.insert(res.tracks.end(), r2.tracks.begin(), r2.tracks.end());
         res.vias.insert(res.vias.end(), r2.vias.begin(), r2.vias.end());
+        // Pass 2 routed the connections pass 1 left open (its ratsnest is the refilled
+        // board's), so the counts add (issue 54): without this, result.routed stays at
+        // pass 1's count and everything derived from it - the summary's routed and
+        // completion fields, and exit_reason - misreads a kept repair.
+        res.routed += r2.routed;
         unconnected_after_refill = after;
         filled_now = std::move(refilled_again);
       }

@@ -201,9 +201,14 @@ struct RouteJobResult {
   // Why exit_code() is what it is (issue 43): exit 3 conflates connections the router left
   // open with pours KiCad's zone refill would leave unconnected on an otherwise complete
   // board. The route JSON summary carries this discriminator so callers can tell them apart.
+  // The discriminator is the routed count, not the refill count (issue 54):
+  // unconnected_after_refill counts every unconnected item on the refilled board, the pads
+  // of connections the router never routed included, so keying the reason on it labels any
+  // soft-zones job with genuine opens "unconnected_after_refill". Only a job that routed
+  // everything it planned and still exits 3 earns that reason.
   const char* exit_reason() const {
-    if (unconnected_after_refill >= 0) return unconnected_after_refill == 0 ? "complete" : "unconnected_after_refill";
-    return result.routed == result.connections ? "complete" : "open_connections";
+    if (exit_code() == 0) return "complete";
+    return result.routed < result.connections ? "open_connections" : "unconnected_after_refill";
   }
 };
 
