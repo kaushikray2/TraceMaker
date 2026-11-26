@@ -1444,7 +1444,7 @@ static int run_main(int argc, char** argv) {
   route->add_option("--copper-layers", r_job.copper_layers, "Route with this many copper layers (even): inner layers are added, or empty ones removed, in the output too")
       ->check(CLI::Range(2, 32));
   std::vector<int> r_try_layers;
-  bool r_finish = false, r_finish_masks = false, r_finish_fresh = false, r_finish_chains = false, r_finish_guard_walls = false;
+  bool r_finish = false, r_finish_masks = false, r_finish_fresh = false, r_finish_chains = false, r_finish_guard_walls = false, r_finish_rip_walls = false;
   std::vector<int> r_finish_layers;
   route->add_flag("--finish", r_finish,
                   "Rungs towards a complete board, each on top of the one before (what is routed stays): the run as given; then the open connections "
@@ -1455,6 +1455,8 @@ static int run_main(int argc, char** argv) {
   route->add_flag("--finish-masks", r_finish_masks, "With --finish: a rung after the fitted rules where pad solder-mask openings no longer keep tracks out (--soft-pad-masks)");
   route->add_flag("--finish-guard-walls", r_finish_guard_walls,
                   "With --finish: keep a routing rung only when open + walled-in pins improves (DR-22: a rung's own copper can wall the pins it leaves open in, and no later rung can reach a walled pin; priced from a wall proof over each rung's output board, computed even with --no-why-open). Chains rungs are not priced; a kept one re-prices the best board");
+  route->add_flag("--finish-rip-walls", r_finish_rip_walls,
+                  "With --finish: after the rungs, free pins the best board walls in with its own routed copper (DR-22 Tier 2-prime): proof the best board, rip exactly the tracks, arcs and vias the proof names (locked copper is never ripped), route the opened connections on top, and keep a round only when open + walled improves; at most 4 rounds");
   route->add_option("--finish-layers", r_finish_layers, "With --finish: later rungs that add this many copper layers to the board's count (e.g. 2,4); none by default")
       ->delimiter(',');
   route->add_option("--try-layers", r_try_layers,
@@ -1990,7 +1992,7 @@ static int run_main(int argc, char** argv) {
           std::printf("%s\n", line.c_str());
           std::fflush(stdout);
         };
-        return tmk::app::run_finish(std::move(job), r_finish_layers, r_finish_masks, r_finish_fresh, r_finish_chains, r_finish_guard_walls).exit_code();
+        return tmk::app::run_finish(std::move(job), r_finish_layers, r_finish_masks, r_finish_fresh, r_finish_chains, r_finish_guard_walls, r_finish_rip_walls).exit_code();
       }
       if (!r_try_layers.empty()) {
         if (job.copper_layers > 0) throw std::invalid_argument("--try-layers and --copper-layers: give one");

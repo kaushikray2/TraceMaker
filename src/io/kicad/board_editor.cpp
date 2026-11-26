@@ -93,6 +93,7 @@ void BoardEditor::add_via(const model::Via& v) {
 
 void BoardEditor::remove_track(std::size_t index) { lb_.doc.remove(lb_.board.tracks.at(index).node); }
 void BoardEditor::remove_via(std::size_t index) { lb_.doc.remove(lb_.board.vias.at(index).node); }
+void BoardEditor::remove_arc(std::size_t index) { lb_.doc.remove(lb_.board.arcs.at(index).node); }
 
 void BoardEditor::move_footprint(std::size_t index, model::Point pos, double angle) {
   auto& doc = lb_.doc;

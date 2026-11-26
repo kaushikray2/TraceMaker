@@ -2644,7 +2644,7 @@ RouteJobResult run_layer_advisor(RouteJob job, std::vector<int> counts) {
   return std::move(*best);
 }
 
-RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool masks_rung, bool fresh_rung, bool chains_rung, bool guard_walls) {
+RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool masks_rung, bool fresh_rung, bool chains_rung, bool guard_walls, bool rip_walls) {
   namespace fs = std::filesystem;
   auto log = [&](const std::string& line) {
     if (job.log) job.log(line);
@@ -2851,6 +2851,121 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
       remove_tmp(tmp);
     }
     if (best_open == 0) break;
+  }
+  // DR-22 Tier 2-prime (--finish-rip-walls): after the rungs, free the pins the best board walls in with its own
+  // routed copper. Each round proofs the best board, rips exactly the routed items the proof names (locked copper
+  // is never ripped), and routes the opened connections on top; a round is kept only when open + walled improves,
+  // the guard price. At most 4 rounds; a round that frees nothing or wins nothing ends the phase.
+  if (rip_walls && best && best_open > 0) {
+    auto prove_full = [&](const std::string& board_file) -> std::optional<nlohmann::json> {
+      RouteJob pj = job;
+      const std::string proof_out = stem.string() + ".proof.kicad_pcb";
+      pj.in = board_file;
+      pj.out = proof_out;
+      pj.json_out.clear();
+      pj.items_out.clear();
+      pj.hold = false;
+      pj.reroute = false;
+      pj.warm_pcb.clear();
+      pj.copper_layers = 0;
+      pj.repair = "off";
+      pj.rescue = false;
+      pj.why_open = true;
+      pj.why_open_output = false;
+      if (best_fit && pj.fit_rules_from.empty()) pj.fit_rules_from = job.in;
+      pj.opt.work_budget = 1;
+      pj.log = nullptr;
+      RouteJobResult pr = run_route_job(std::move(pj));
+      remove_tmp(proof_out);
+      if (pr.summary.contains("why_open")) return pr.summary["why_open"];
+      if (pr.result.connections > 0 && pr.result.routed >= pr.result.connections)
+        return nlohmann::json{{"walled_in", 0}, {"proved", nlohmann::json::array()}};
+      return std::nullopt;
+    };
+    for (int round = 1; round <= 4 && best_open > 0; ++round) {
+      const auto proof = prove_full(best_tmp);
+      if (!proof || !proof->contains("proved")) break;
+      const int walled_before = proof->value("walled_in", 0);
+      std::set<std::pair<int, int>> rip;  // (kind, board index)
+      for (const auto& pe : (*proof)["proved"])
+        for (const auto& wi : pe["wall_items"]) {
+          const std::string kind = wi.value("kind", "");
+          const int k = kind == "Track" ? static_cast<int>(drc::ItemKind::Track)
+                        : kind == "Arc"   ? static_cast<int>(drc::ItemKind::Arc)
+                        : kind == "Via"   ? static_cast<int>(drc::ItemKind::Via)
+                                          : -1;
+          if (k >= 0) rip.insert({k, wi.value("index", -1)});
+        }
+      if (rip.empty()) break;
+      auto lb = io::read_board_file(best_tmp);
+      io::BoardEditor ed(lb, job.opt.seed);
+      int ripped = 0, locked_kept = 0;
+      for (const auto& [kind, idx] : rip) {
+        if (idx < 0) continue;
+        const auto i = static_cast<std::size_t>(idx);
+        if (kind == static_cast<int>(drc::ItemKind::Track) && i < lb.board.tracks.size()) {
+          if (lb.board.tracks[i].locked) { ++locked_kept; continue; }
+          ed.remove_track(i);
+          ++ripped;
+        } else if (kind == static_cast<int>(drc::ItemKind::Arc) && i < lb.board.arcs.size()) {
+          if (lb.board.arcs[i].locked) { ++locked_kept; continue; }
+          ed.remove_arc(i);
+          ++ripped;
+        } else if (kind == static_cast<int>(drc::ItemKind::Via) && i < lb.board.vias.size()) {
+          if (lb.board.vias[i].locked) { ++locked_kept; continue; }
+          ed.remove_via(i);
+          ++ripped;
+        }
+      }
+      log(fmt("finish: rip-walls round %d: the proof names %zu walling item(s); ripping %d (%d locked kept)", round, rip.size(), ripped, locked_kept));
+      if (ripped == 0) break;
+      const std::string ripped_file = stem.string() + fmt(".finish-rip-%d.kicad_pcb", round);
+      ed.save(ripped_file);
+      copy_project_files(best_tmp, ripped_file);
+      const std::string tmp = tmp_of(100 + round);
+      RouteJob j = job;
+      j.in = ripped_file;
+      j.out = tmp;
+      j.json_out.clear();
+      j.items_out.clear();
+      j.hold = false;
+      j.reroute = false;
+      j.warm_pcb.clear();
+      j.why_open = true;
+      j.why_open_output = true;
+      if (best_fit) {
+        if (j.fit_rules_from.empty()) j.fit_rules_from = job.in;
+        j.repair = "on";
+      }
+      const auto t0 = std::chrono::steady_clock::now();
+      RouteJobResult r = run_route_job(std::move(j));
+      const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+      const int open = r.result.connections - r.result.routed;
+      const int walled = r.summary.contains("why_open") ? r.summary["why_open"].value("walled_in", 0) : 0;
+      const bool kept = open + walled < best_open + walled_before || (open + walled == best_open + walled_before && open < best_open);
+      rows.push_back({{"rung", fmt("rip walls round %d", round)}, {"open_before", best_open}, {"open_after", open},
+                      {"walled_before", walled_before}, {"walled_after", walled}, {"ripped", ripped}, {"kept", kept},
+                      {"copper_layers", r.summary.value("copper_layers", layers0)}, {"seconds", secs}});
+      log(fmt("finish: rip-walls round %d: %d open, %d walled%s", round, open, walled, kept ? "" : " (no better: discarded)"));
+      any_time_limited = any_time_limited || r.summary.value("time_limited", false);
+      any_stopped_early = any_stopped_early || r.summary.value("stopped_early", false);
+      any_kb_used = any_kb_used || r.summary.value("kb_used", false);
+      all_deterministic = all_deterministic && r.summary.value("deterministic", false);
+      remove_tmp(ripped_file);
+      if (kept) {
+        remove_tmp(best_tmp);
+        best = std::move(r);
+        best_tmp = tmp;
+        best_open = open;
+        best_walled = walled;
+        best_walled_proved = true;
+        fs::copy_file(best_tmp, final_out, fs::copy_options::overwrite_existing);
+        copy_project_files(job.in, final_out);
+      } else {
+        remove_tmp(tmp);
+        break;
+      }
+    }
   }
   remove_tmp(best_tmp);
   log(best_open == 0 ? fmt("finish: complete after %zu rung%s; written to %s", rows.size(), rows.size() == 1 ? "" : "s", final_out.c_str())

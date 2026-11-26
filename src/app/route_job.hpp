@@ -215,7 +215,7 @@ RouteJobResult run_layer_advisor(RouteJob job, std::vector<int> counts);
 // open + walled-in pins improves over the best board so far: a rung's own copper can wall the pins it leaves open in, and no later rung
 // can reach a walled pin, so the plain open-count rule keeps boards that are worse than they look.
 RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool masks_rung = false, bool fresh_rung = false, bool chains_rung = false,
-                          bool guard_walls = false);
+                          bool guard_walls = false, bool rip_walls = false);
 
 // Buses (doc 05 §38): the groups `specs` ("NAME=PATTERN") name on the board, then, with `detect`, the groups found in
 // the net names that share no net with an earlier group. Each group gets the skew limit of the board's custom

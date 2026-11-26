@@ -62,6 +62,8 @@ add_test(NAME deterministic_mode COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/int
 add_test(NAME heartbeat COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration/heartbeat.py $<TARGET_FILE:tracemaker> ${CMAKE_BINARY_DIR}/integration/heartbeat)
 add_test(NAME exit_codes COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration/exit_codes.py $<TARGET_FILE:tracemaker> ${CMAKE_BINARY_DIR}/integration/exit_codes)
 add_test(NAME route_open_only COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration/route_open_only.py $<TARGET_FILE:tracemaker> ${CMAKE_BINARY_DIR}/integration/route_open_only)
+add_test(NAME finish_rip_walls COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration/finish_rip_walls.py $<TARGET_FILE:tracemaker> ${CMAKE_BINARY_DIR}/integration/finish_rip_walls)
+set_tests_properties(finish_rip_walls PROPERTIES SKIP_RETURN_CODE 77 LABELS "route;integration" TIMEOUT 1200 PROCESSORS 8)
 add_test(NAME reroute_scope COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration/reroute_scope.py $<TARGET_FILE:tracemaker> ${CMAKE_BINARY_DIR}/integration/reroute_scope)
 add_test(NAME batch_mode COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration/batch_mode.py $<TARGET_FILE:tracemaker> ${CMAKE_BINARY_DIR}/integration/batch_mode)
 set_tests_properties(batch_mode PROPERTIES SKIP_RETURN_CODE 77 LABELS "route;integration" TIMEOUT 900 PROCESSORS 8)
