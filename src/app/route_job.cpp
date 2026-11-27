@@ -1668,11 +1668,27 @@ RouteJobResult run_route_job(RouteJob job) {
       if (kept) {
         res.tracks.insert(res.tracks.end(), r2.tracks.begin(), r2.tracks.end());
         res.vias.insert(res.vias.end(), r2.vias.begin(), r2.vias.end());
-        // Pass 2 routed the connections pass 1 left open (its ratsnest is the refilled
-        // board's), so the counts add (issue 54): without this, result.routed stays at
-        // pass 1's count and everything derived from it - the summary's routed and
-        // completion fields, and exit_reason - misreads a kept repair.
-        res.routed += r2.routed;
+        // A kept repair heals some of pass 1's open connections, but pass 2's routed
+        // count is not additive: pass 2 ran on the refilled board without soft zones,
+        // so it also bridges plane connections pass 1 counted as routed through the
+        // pour and the refill severed into islands - adding the counts could push
+        // routed past connections. Instead drop from pass 1's open list the entries
+        // pass 2 no longer reports open and derive routed from what remains, so
+        // routed = connections - |unrouted| holds exactly (issue 54).
+        auto still_open = [&r2](const route::RouteResult::Unrouted& u) {
+          for (const auto& v : r2.unrouted) {
+            if (v.net != u.net) continue;
+            if (v.pad_a == u.pad_a && v.pad_b == u.pad_b) return true;
+            if (u.pad_b >= 0 && v.pad_a == u.pad_b && v.pad_b == u.pad_a) return true;
+            if (u.pad_b < 0 && v.pad_a == u.pad_a) return true;
+          }
+          return false;
+        };
+        std::vector<route::RouteResult::Unrouted> remaining;
+        for (const auto& u : res.unrouted)
+          if (still_open(u)) remaining.push_back(u);
+        res.unrouted = std::move(remaining);
+        res.routed = res.connections - static_cast<int>(res.unrouted.size());
         unconnected_after_refill = after;
         filled_now = std::move(refilled_again);
       }
