@@ -2920,101 +2920,271 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
     if (best_open == 0) break;
   }
   // DR-22 Tier 2-prime (--finish-rip-walls): after the rungs, free the pins the best board walls in with its own
-  // routed copper. Each round proofs the best board, rips exactly the routed items the proof names (locked copper
-  // is never ripped), and routes the opened connections on top; a round is kept only when open + walled improves,
-  // the guard price. At most 4 rounds; a round that frees nothing or wins nothing ends the phase.
+  // routed copper. Each round proofs the best board and builds two rip sets from the items the proof names
+  // (issue 47): the minimal set - the named items, with a coupled pair's wall item closed over both halves'
+  // branches so a pair is never split by the rip - and the peeled set, which also pulls the stubs the rip
+  // severs on single-ended nets back towards their pins (a bounded topological peel along the trace chain,
+  // never a spatial window: a window rips healthy neighbours with the blockers, and one heal pass cannot
+  // re-pack the crater). The peeled set is tried first; when it wins nothing and ripped more than the
+  // minimal set, the round retries with the minimal set, so a round can do no worse than the surgical rip.
+  // A kept round's heal has its dead antennas peeled before it is priced. A round is kept only when
+  // (open, walled) improves lexicographically (issue 57): never a routed connection for wall count. Locked
+  // copper is never ripped. At most 4 rounds; a round that frees nothing or wins nothing ends the phase.
   if (rip_walls && best && best_open > 0) {
+    const auto rules = io::read_design_rules(best_tmp);
+    auto graph_kind = [](int item_kind) {  // drc::ItemKind -> copper graph kind (0 track, 1 via); -1: arcs are stops, not graph items
+      return item_kind == static_cast<int>(drc::ItemKind::Track) ? 0 : item_kind == static_cast<int>(drc::ItemKind::Via) ? 1 : -1;
+    };
+    auto item_kind_of = [](int gk) { return gk == 0 ? static_cast<int>(drc::ItemKind::Track) : static_cast<int>(drc::ItemKind::Via); };
     for (int round = 1; round <= 4 && best_open > 0; ++round) {
       const auto proof = prove_board(best_tmp);
       if (!proof || !proof->contains("proved")) break;
       const int walled_before = proof->value("walled_in", 0);
       best_walled = walled_before;      // the proof ran: its price is the finish price even if the round is discarded (issue 48)
       best_walled_proved = true;
-      std::set<std::pair<int, int>> rip;  // (kind, board index)
-      for (const auto& pe : (*proof)["proved"])
+      auto lb = io::read_board_file(best_tmp);
+      drc::RuleEngine re(lb.board, rules);
+      // The proof's wall items, grouped by the pin they wall in; a group's pin anchors its peel (step B).
+      struct WallGroup {
+        geom::Point pin{};
+        bool pin_found = false;
+        std::set<std::pair<int, int>> items;  // (ItemKind, board index)
+      };
+      std::vector<WallGroup> groups;
+      std::set<std::pair<int, int>> named;
+      for (const auto& pe : (*proof)["proved"]) {
+        WallGroup g;
+        const std::string pin = pe.value("pin", "");
+        for (std::size_t i = 0; i < lb.board.pads.size(); ++i)
+          if (analysis::pad_label(lb.board, static_cast<int>(i)) == pin) { g.pin = lb.board.pads[i].pos; g.pin_found = true; break; }
         for (const auto& wi : pe["wall_items"]) {
           const std::string kind = wi.value("kind", "");
           const int k = kind == "Track" ? static_cast<int>(drc::ItemKind::Track)
                         : kind == "Arc"   ? static_cast<int>(drc::ItemKind::Arc)
                         : kind == "Via"   ? static_cast<int>(drc::ItemKind::Via)
                                           : -1;
-          if (k >= 0) rip.insert({k, wi.value("index", -1)});
+          const int idx = wi.value("index", -1);
+          if (k >= 0 && idx >= 0) { g.items.insert({k, idx}); named.insert({k, idx}); }
         }
-      if (rip.empty()) break;
-      auto lb = io::read_board_file(best_tmp);
-      io::BoardEditor ed(lb, job.opt.seed);
-      int ripped = 0, locked_kept = 0;
-      for (const auto& [kind, idx] : rip) {
-        if (idx < 0) continue;
-        const auto i = static_cast<std::size_t>(idx);
-        if (kind == static_cast<int>(drc::ItemKind::Track) && i < lb.board.tracks.size()) {
-          if (lb.board.tracks[i].locked) { ++locked_kept; continue; }
-          ed.remove_track(i);
-          ++ripped;
-        } else if (kind == static_cast<int>(drc::ItemKind::Arc) && i < lb.board.arcs.size()) {
-          if (lb.board.arcs[i].locked) { ++locked_kept; continue; }
-          ed.remove_arc(i);
-          ++ripped;
-        } else if (kind == static_cast<int>(drc::ItemKind::Via) && i < lb.board.vias.size()) {
-          if (lb.board.vias[i].locked) { ++locked_kept; continue; }
-          ed.remove_via(i);
-          ++ripped;
+        if (!g.pin_found && !g.items.empty()) {  // fall back to the first wall item's position
+          const auto& [k, idx] = *g.items.begin();
+          const auto i = static_cast<std::size_t>(idx);
+          if (k == static_cast<int>(drc::ItemKind::Track)) g.pin = lb.board.tracks[i].a;
+          else if (k == static_cast<int>(drc::ItemKind::Via)) g.pin = lb.board.vias[i].pos;
+          else g.pin = lb.board.arcs[i].a;
+          g.pin_found = true;
+        }
+        if (!g.items.empty()) groups.push_back(std::move(g));
+      }
+      if (named.empty()) break;
+      auto net_of = [&](const std::pair<int, int>& it) -> model::NetId {
+        const auto i = static_cast<std::size_t>(it.second);
+        if (it.first == static_cast<int>(drc::ItemKind::Track)) return lb.board.tracks[i].net;
+        if (it.first == static_cast<int>(drc::ItemKind::Via)) return lb.board.vias[i].net;
+        if (it.first == static_cast<int>(drc::ItemKind::Arc)) return lb.board.arcs[i].net;
+        return 0;
+      };
+      // rip_minimal (issue 47 step A): the named items; a wall item of a coupled pair is closed over the
+      // branches of both halves, so the heal re-routes the pair coupled instead of healing a snipped half
+      // single-ended. When either half's branch holds a fixed item, neither half is ripped - the seed item
+      // itself stays, so a locked pair is never split.
+      std::set<std::pair<int, int>> rip_min = named;
+      for (const auto& g : groups) {
+        for (const auto& it : g.items) {
+          const int gk = graph_kind(it.first);
+          if (gk < 0) continue;
+          const model::NetId n = net_of(it);
+          const model::NetId p = n > 0 ? re.dp_partner(n) : 0;
+          if (p <= 0 || !re.coupled_diff_pair(n, p)) continue;
+          const auto branch_n = passes::branch_of(lb.board, gk, it.second);
+          if (branch_n.empty()) { rip_min.erase(it); continue; }
+          const route::PairRule pr = route::pair_rule(lb.board, rules, re, n, p);
+          const Coord reach = route::coupled_threshold(pr) + pr.via_offset;
+          std::set<std::pair<int, int>> partner_items;
+          bool partner_fixed = false;
+          for (const auto& [bk, bi] : branch_n) {
+            std::vector<geom::Point> spots;
+            if (bk == 0) {
+              const auto& t = lb.board.tracks[static_cast<std::size_t>(bi)];
+              spots = {t.a, geom::Point{(t.a.x + t.b.x) / 2, (t.a.y + t.b.y) / 2}, t.b};
+            } else {
+              spots = {lb.board.vias[static_cast<std::size_t>(bi)].pos};
+            }
+            for (const geom::Point e : spots) {
+              for (const auto& y : passes::items_within(lb.board, e, reach, p)) {
+                const auto branch_p = passes::branch_of(lb.board, y.first, y.second);
+                if (branch_p.empty()) { partner_fixed = true; break; }
+                partner_items.insert(branch_p.begin(), branch_p.end());
+              }
+              if (partner_fixed) break;
+            }
+            if (partner_fixed) break;
+          }
+          if (partner_fixed) { rip_min.erase(it); continue; }
+          for (const auto& [bk, bi] : branch_n) rip_min.insert({item_kind_of(bk), bi});
+          for (const auto& [bk, bi] : partner_items) rip_min.insert({item_kind_of(bk), bi});
         }
       }
-      log(fmt("finish: rip-walls round %d: the proof names %zu walling item(s); ripping %d (%d locked kept)", round, rip.size(), ripped, locked_kept));
-      if (ripped == 0) break;
-      const std::string ripped_file = stem.string() + fmt(".finish-rip-%d.kicad_pcb", round);
-      ed.save(ripped_file);
-      copy_project_files(best_tmp, ripped_file);
-      const std::string tmp = tmp_of(100 + round);
-      RouteJob j = job;
-      j.in = ripped_file;
-      j.out = tmp;
-      j.json_out.clear();
-      j.items_out.clear();
-      j.hold = false;
-      j.reroute = false;
-      j.reroute_nets.clear();    // the heal routes the ripped board as it stands (issue 46)
-      j.reroute_window.clear();
-      j.warm_pcb.clear();
-      j.copper_layers = best_layers;
-      if (best_masks) j.opt.soft_pad_masks = true;
-      j.why_open = true;
-      j.why_open_output = true;
-      if (best_fit) {
-        if (j.fit_rules_from.empty()) j.fit_rules_from = job.in;
-        j.repair = "on";
-        j.repair_opt.select = "both";
-        j.repair_opt.focus = true;
+      // rip_peeled (step B): the minimal set plus what lifting it leaves dangling on single-ended nets,
+      // peeled along the trace chain only, each item within 1 mm of a pin walled in this round.
+      std::set<std::pair<int, int>> rip_peel = rip_min;
+      {
+        std::set<model::NetId> pair_nets;
+        for (std::size_t n = 1; n < lb.board.nets.size(); ++n) {
+          const model::NetId pn = static_cast<model::NetId>(n);
+          const model::NetId p = re.dp_partner(pn);
+          if (p > 0 && re.coupled_diff_pair(pn, p)) pair_nets.insert(pn);
+        }
+        std::vector<std::pair<int, int>> lifted;
+        std::vector<geom::Point> anchors;
+        for (const auto& it : rip_min) {
+          const int gk = graph_kind(it.first);
+          if (gk >= 0) lifted.emplace_back(gk, it.second);
+        }
+        for (const auto& g : groups) anchors.push_back(g.pin);
+        for (const auto& [gk, gi] : passes::prune_lift_bounded(lb.board, lifted, anchors, 1'000'000, pair_nets))
+          rip_peel.insert({item_kind_of(gk), gi});
       }
-      const auto t0 = std::chrono::steady_clock::now();
-      RouteJobResult r = run_route_job(std::move(j));
-      const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-      const int open = r.unconnected_after_refill >= 0 ? r.unconnected_after_refill : r.result.connections - r.result.routed;
-      const int walled = r.summary.contains("why_open") ? r.summary["why_open"].value("walled_in", 0) : 0;
-      const bool kept = open < best_open || (open == best_open && walled < walled_before);  // lexicographic (issue 57): a round never trades a routed connection for wall count
-      rows.push_back({{"rung", fmt("rip walls round %d", round)}, {"open_before", best_open}, {"open_after", open},
-                      {"walled_before", walled_before}, {"walled_after", walled}, {"ripped", ripped}, {"kept", kept},
-                      {"copper_layers", r.summary.value("copper_layers", layers0)}, {"seconds", secs}});
-      log(fmt("finish: rip-walls round %d: %d open, %d walled%s", round, open, walled, kept ? "" : " (no better: discarded)"));
-      any_time_limited = any_time_limited || r.summary.value("time_limited", false);
-      any_stopped_early = any_stopped_early || r.summary.value("stopped_early", false);
-      any_kb_used = any_kb_used || r.summary.value("kb_used", false);
-      all_deterministic = all_deterministic && r.summary.value("deterministic", false);
-      remove_tmp(ripped_file);
-      if (kept) {
-        remove_tmp(best_tmp);
-        best = std::move(r);
-        best_tmp = tmp;
-        best_open = open;
-        best_walled = walled;
-        best_walled_proved = true;
-        fs::copy_file(best_tmp, final_out, fs::copy_options::overwrite_existing);
-        copy_project_files(job.in, final_out);
-      } else {
+      // One attempt: rip `rip` from the best board, heal it, peel the heal's dead antennas, price the
+      // result, and adopt it when the price improves. Returns true when the attempt was kept.
+      auto attempt = [&](const std::set<std::pair<int, int>>& rip, const char* tag) -> bool {
+        auto lb2 = io::read_board_file(best_tmp);
+        io::BoardEditor ed(lb2, job.opt.seed);
+        int ripped = 0, locked_kept = 0;
+        std::set<model::NetId> rip_nets;
+        for (const auto& [kind, idx] : rip) {
+          if (idx < 0) continue;
+          const auto i = static_cast<std::size_t>(idx);
+          if (kind == static_cast<int>(drc::ItemKind::Track) && i < lb2.board.tracks.size()) {
+            if (lb2.board.tracks[i].locked) { ++locked_kept; continue; }
+            rip_nets.insert(lb2.board.tracks[i].net);
+            ed.remove_track(i);
+            ++ripped;
+          } else if (kind == static_cast<int>(drc::ItemKind::Arc) && i < lb2.board.arcs.size()) {
+            if (lb2.board.arcs[i].locked) { ++locked_kept; continue; }
+            rip_nets.insert(lb2.board.arcs[i].net);
+            ed.remove_arc(i);
+            ++ripped;
+          } else if (kind == static_cast<int>(drc::ItemKind::Via) && i < lb2.board.vias.size()) {
+            if (lb2.board.vias[i].locked) { ++locked_kept; continue; }
+            rip_nets.insert(lb2.board.vias[i].net);
+            ed.remove_via(i);
+            ++ripped;
+          }
+        }
+        log(fmt("finish: rip-walls round %d (%s): the proof names %zu walling item(s); ripping %d (%d locked kept)", round, tag, named.size(), ripped, locked_kept));
+        if (ripped == 0) return false;
+        const std::string ripped_file = stem.string() + fmt(".finish-rip-%d.kicad_pcb", round);
+        ed.save(ripped_file);
+        copy_project_files(best_tmp, ripped_file);
+        const std::string tmp = tmp_of(100 + round);
+        RouteJob j = job;
+        j.in = ripped_file;
+        j.out = tmp;
+        j.json_out.clear();
+        j.items_out.clear();
+        j.hold = false;
+        j.reroute = false;
+        j.reroute_nets.clear();    // the heal routes the ripped board as it stands (issue 46)
+        j.reroute_window.clear();
+        j.warm_pcb.clear();
+        j.copper_layers = best_layers;
+        if (best_masks) j.opt.soft_pad_masks = true;
+        j.why_open = true;
+        j.why_open_output = true;
+        if (best_fit) {
+          if (j.fit_rules_from.empty()) j.fit_rules_from = job.in;
+          j.repair = "on";
+          j.repair_opt.select = "both";
+          j.repair_opt.focus = true;
+        }
+        const auto t0 = std::chrono::steady_clock::now();
+        RouteJobResult r = run_route_job(std::move(j));
+        const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        const int open = r.unconnected_after_refill >= 0 ? r.unconnected_after_refill : r.result.connections - r.result.routed;
+        int walled = r.summary.contains("why_open") ? r.summary["why_open"].value("walled_in", 0) : 0;
+        // Step C: peel the heal's dead antennas on the ripped nets before pricing. A bypassed stub tail
+        // still touches its source pad, so padless_islands (which cuts only 0-pad islands) leaves it
+        // standing as dangling copper. Peeling a degree-1 end cannot disconnect a pad pair, so `open`
+        // stands; the walled price is re-proved on the peeled board and the summary follows it.
+        int antennas = 0;
+        {
+          auto healed = io::read_board_file(tmp);
+          // Protected (issue 47 step C): copper that was already a dead end on the board entering this
+          // round - that is the user's own stub, not an antenna of this round's making. Copper alive
+          // entering the round and dead on the healed board was severed by the rip and bypassed by the
+          // heal; it is pruned even though its geometry predates the round.
+          std::set<std::tuple<int, int, int, int, int, int>> dead_tracks;
+          std::set<std::tuple<int, int, int, int>> dead_vias;
+          {
+            const auto round_in = io::read_board_file(best_tmp);
+            for (const auto& [k, i] : passes::peel_dead_ends(round_in.board, rip_nets, [](int, int) { return false; })) {
+              if (k == 0) {
+                const auto& t = round_in.board.tracks[static_cast<std::size_t>(i)];
+                dead_tracks.emplace(t.net, t.layer, t.a.x, t.a.y, t.b.x, t.b.y);
+                dead_tracks.emplace(t.net, t.layer, t.b.x, t.b.y, t.a.x, t.a.y);
+              } else {
+                const auto& v = round_in.board.vias[static_cast<std::size_t>(i)];
+                dead_vias.emplace(v.net, v.pos.x, v.pos.y, v.size);
+              }
+            }
+          }
+          auto is_protected = [&](int kind, int idx) {
+            const auto i = static_cast<std::size_t>(idx);
+            if (kind == 0) { const auto& t = healed.board.tracks[i]; return dead_tracks.count({t.net, t.layer, t.a.x, t.a.y, t.b.x, t.b.y}) > 0; }
+            const auto& v = healed.board.vias[i];
+            return dead_vias.count({v.net, v.pos.x, v.pos.y, v.size}) > 0;
+          };
+          const auto dead = passes::peel_dead_ends(healed.board, rip_nets, is_protected);
+          if (!dead.empty()) {
+            io::BoardEditor ed2(healed, job.opt.seed);
+            for (const auto& [gk, gi] : dead) {
+              if (gk == 0) ed2.remove_track(static_cast<std::size_t>(gi));
+              else ed2.remove_via(static_cast<std::size_t>(gi));
+              ++antennas;
+            }
+            ed2.save(tmp);
+            if (const auto p2 = prove_board(tmp); p2) {
+              walled = p2->value("walled_in", walled);
+              r.summary["why_open"] = *p2;
+            }
+          }
+        }
+        if (antennas) log(fmt("finish: rip-walls round %d (%s): peeled %d dead antenna item(s) off the heal", round, tag, antennas));
+        const bool kept = open < best_open || (open == best_open && walled < walled_before);  // lexicographic (issue 57)
+        rows.push_back({{"rung", fmt("rip walls round %d", round)}, {"open_before", best_open}, {"open_after", open},
+                        {"walled_before", walled_before}, {"walled_after", walled}, {"ripped", ripped}, {"kept", kept},
+                        {"copper_layers", r.summary.value("copper_layers", layers0)}, {"seconds", secs}});
+        log(fmt("finish: rip-walls round %d: %d open, %d walled%s", round, open, walled, kept ? "" : " (no better: discarded)"));
+        any_time_limited = any_time_limited || r.summary.value("time_limited", false);
+        any_stopped_early = any_stopped_early || r.summary.value("stopped_early", false);
+        any_kb_used = any_kb_used || r.summary.value("kb_used", false);
+        all_deterministic = all_deterministic && r.summary.value("deterministic", false);
+        remove_tmp(ripped_file);
+        if (kept) {
+          remove_tmp(best_tmp);
+          best = std::move(r);
+          best_tmp = tmp;
+          best_open = open;
+          best_walled = walled;
+          best_walled_proved = true;
+          fs::copy_file(best_tmp, final_out, fs::copy_options::overwrite_existing);
+          copy_project_files(job.in, final_out);
+          return true;
+        }
         remove_tmp(tmp);
-        break;
+        return false;
+      };
+      // Step D: the peeled set first; the minimal set is the round's fallback, so the round can do no
+      // worse than the surgical rip alone.
+      bool kept = false;
+      if (rip_peel.size() > rip_min.size()) {
+        kept = attempt(rip_peel, "peeled");
+        if (!kept) kept = attempt(rip_min, "minimal");
+      } else {
+        kept = attempt(rip_min, "minimal");
       }
+      if (!kept) break;
     }
   }
   remove_tmp(best_tmp);

@@ -246,6 +246,103 @@ class CopperGraph {
     return extra;
   }
 
+  // prune() with a bound (issue 47 step B): a dead item is lifted only when its copper lies within max_dist
+  // of an anchor and its net is not in skip_nets, and the peel does not continue through an item it leaves
+  // standing - the peel pulls a severed stub back towards its pin, it does not wander the board.
+  std::vector<Ref> prune_bounded(const std::vector<Ref>& lifted_now, const std::vector<Point>& anchors, Coord max_dist,
+                                 const std::set<NetId>& skip_nets) {
+    std::vector<Ref> extra;
+    std::vector<Ref> work;
+    auto push_contacts = [&](Ref r) {
+      for (const auto& [pt, layers] : ends(r)) {
+        const Contacts c = contacts(r, pt, layers, true);
+        work.insert(work.end(), c.movable.begin(), c.movable.end());
+      }
+    };
+    for (const Ref& r : lifted_now) push_contacts(r);
+    // A stub can tap the MIDDLE of a lifted track (a T-junction): its severed point is an interior
+    // point of the lifted track, which no endpoint query above visits. Seed those items too - any
+    // standing item of a lifted net whose end lies on a lifted track's segment was severed by this rip.
+    for (const Ref& r : lifted_now) {
+      if (r.kind != 0) continue;
+      const auto& rt = b_.tracks[static_cast<std::size_t>(r.index)];
+      for (std::size_t j = 0; j < b_.tracks.size(); ++j) {
+        const Ref y{0, static_cast<int>(j)};
+        if (lifted(y) || net(y) != net(r)) continue;
+        const auto& t = b_.tracks[j];
+        if (t.layer != rt.layer) continue;
+        if (geom::point_seg_closer(t.a, rt.a, rt.b, kTouch) || geom::point_seg_closer(t.b, rt.a, rt.b, kTouch)) work.push_back(y);
+      }
+      for (std::size_t j = 0; j < b_.vias.size(); ++j) {
+        const Ref y{1, static_cast<int>(j)};
+        if (lifted(y) || net(y) != net(r)) continue;
+        const auto& v = b_.vias[j];
+        if (geom::point_seg_closer(v.pos, rt.a, rt.b, v.size / 2 + kTouch)) work.push_back(y);
+      }
+    }
+    while (!work.empty()) {
+      const Ref y = work.back();
+      work.pop_back();
+      if (lifted(y) || fixed(y) || skip_nets.count(net(y))) continue;
+      bool near_anchor = anchors.empty();
+      for (const Point& a : anchors)
+        if (gap(y, a) <= static_cast<double>(max_dist)) { near_anchor = true; break; }
+      if (!near_anchor) continue;
+      bool dead = false;
+      for (const auto& [pt, layers] : ends(y)) {
+        const Contacts now = contacts(y, pt, layers, true);
+        const int n_now = static_cast<int>(now.movable.size()) + (now.stop ? 1 : 0);
+        if (y.kind == 0 && n_now == 0) dead = true;
+        if (y.kind == 1 && n_now <= 1) dead = true;
+      }
+      if (!dead) continue;
+      set_lifted(y, true);
+      extra.push_back(y);
+      push_contacts(y);
+    }
+    return extra;
+  }
+
+  // Dead ends already standing on the board, restricted to `nets` (issue 47 step C): a track with an end
+  // touching nothing, or a via with at most one contact, peeled to a fixpoint. `is_protected` items are
+  // treated as fixed. The lifted set is the peel itself, so an end orphaned by an earlier peel in the same
+  // pass counts as touching nothing.
+  std::vector<Ref> peel_standing(const std::set<NetId>& nets, const std::function<bool(Ref)>& is_protected) {
+    std::vector<Ref> out;
+    auto scan = [&](int kind, std::size_t count) {
+      bool changed = false;
+      for (std::size_t i = 0; i < count; ++i) {
+        const Ref y{kind, static_cast<int>(i)};
+        if (lifted(y) || fixed(y) || is_protected(y)) continue;
+        if (!nets.count(net(y))) continue;
+        bool dead = false;
+        if (kind == 0) {
+          for (const auto& [pt, layers] : ends(y)) {
+            const Contacts now = contacts(y, pt, layers, true);
+            if (now.movable.empty() && !now.stop) dead = true;
+          }
+        } else {
+          const auto e = ends(y);
+          const Contacts now = contacts(y, e[0].first, e[0].second, true);
+          if (static_cast<int>(now.movable.size()) + (now.stop ? 1 : 0) <= 1) dead = true;
+        }
+        if (!dead) continue;
+        set_lifted(y, true);
+        out.push_back(y);
+        changed = true;
+      }
+      return changed;
+    };
+    bool changed = true;
+    while (changed) {
+      const bool a = scan(0, b_.tracks.size());
+      const bool c = scan(1, b_.vias.size());
+      changed = a || c;
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+  }
+
  private:
   static constexpr Coord kTouch = 1000;  // 1 um: end points that KiCad would join although they are a few nm apart
   bool is_junction_via(Ref r) {
@@ -649,6 +746,44 @@ IslandCut padless_islands(const model::Board& before, const model::Board& now, c
   out.base_tracks.erase(std::unique(out.base_tracks.begin(), out.base_tracks.end()), out.base_tracks.end());
   std::sort(out.base_vias.begin(), out.base_vias.end());
   out.base_vias.erase(std::unique(out.base_vias.begin(), out.base_vias.end()), out.base_vias.end());
+  return out;
+}
+
+std::vector<std::pair<int, int>> branch_of(const model::Board& b, int kind, int index) {
+  CopperGraph g(b);
+  std::vector<std::pair<int, int>> out;
+  for (const auto& r : g.branch({kind, index})) out.emplace_back(r.kind, r.index);
+  return out;
+}
+
+std::vector<std::pair<int, int>> items_within(const model::Board& b, geom::Point p, Coord reach_nm, model::NetId net) {
+  CopperGraph g(b);
+  std::vector<std::pair<int, int>> out;
+  for (const auto& r : g.near(p, reach_nm))
+    if (g.net(r) == net) out.emplace_back(r.kind, r.index);
+  return out;
+}
+
+std::vector<std::pair<int, int>> prune_lift_bounded(const model::Board& b, const std::vector<std::pair<int, int>>& lifted,
+                                                    const std::vector<geom::Point>& anchors, Coord max_dist_nm,
+                                                    const std::set<model::NetId>& skip_nets) {
+  CopperGraph g(b);
+  std::vector<CopperGraph::Ref> seed;
+  for (const auto& [k, i] : lifted) {
+    g.set_lifted({k, i}, true);
+    seed.push_back({k, i});
+  }
+  std::vector<std::pair<int, int>> out;
+  for (const auto& r : g.prune_bounded(seed, anchors, max_dist_nm, skip_nets)) out.emplace_back(r.kind, r.index);
+  return out;
+}
+
+std::vector<std::pair<int, int>> peel_dead_ends(const model::Board& b, const std::set<model::NetId>& nets,
+                                                const std::function<bool(int, int)>& is_protected) {
+  CopperGraph g(b);
+  std::vector<std::pair<int, int>> out;
+  for (const auto& r : g.peel_standing(nets, [&](CopperGraph::Ref r) { return is_protected(r.kind, r.index); }))
+    out.emplace_back(r.kind, r.index);
   return out;
 }
 

@@ -15,7 +15,9 @@
 // open connection first, and keeps the result only if no pads that were joined come apart and fewer connections are
 // open (rule 4). On failure the window grows. Ripping is limited to the window: everything outside stays as it was.
 #include <functional>
+#include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -102,5 +104,29 @@ struct IslandCut {
 };
 IslandCut padless_islands(const model::Board& before, const model::Board& now, const std::vector<model::Track>& new_tracks,
                           const std::vector<model::Via>& new_vias);
+
+// Branch and dead-end primitives over a board's copper graph (the CopperGraph of repair.cpp), for callers
+// outside the repair pass (the finish rip-walls phase, issue 47). Kinds are 0 = track, 1 = via; indices are
+// into the board's tracks/vias. A branch is the chain of one net between two stops (a pad, a zone fill, an arc
+// or copper graphic, or a junction of three or more); branch_of returns it whole, or nothing when it holds a
+// fixed item (a locked or tuning-pattern track, a locked or free via), so lifting a branch never cuts one.
+std::vector<std::pair<int, int>> branch_of(const model::Board& b, int kind, int index);
+
+// Tracks and vias of one net whose copper lies within reach_nm of p, ascending.
+std::vector<std::pair<int, int>> items_within(const model::Board& b, geom::Point p, Coord reach_nm, model::NetId net);
+
+// What lifting `lifted` leaves dangling (the prune of the copper graph), bounded: an item is peeled only when
+// its copper lies within max_dist_nm of one of the anchors, the peel does not continue through an item it
+// leaves standing, and items of `skip_nets` are never peeled. Fixed items are never peeled.
+std::vector<std::pair<int, int>> prune_lift_bounded(const model::Board& b, const std::vector<std::pair<int, int>>& lifted,
+                                                    const std::vector<geom::Point>& anchors, Coord max_dist_nm,
+                                                    const std::set<model::NetId>& skip_nets);
+
+// Dead ends already standing on a board, restricted to `nets`: a track with an end that touches nothing, or a
+// via left with at most one contact, peeled to a fixpoint. Peeling a degree-1 end cannot disconnect any pad
+// pair. Fixed items and items `is_protected` accepts (e.g. copper that was already on the caller's input
+// board) are never peeled.
+std::vector<std::pair<int, int>> peel_dead_ends(const model::Board& b, const std::set<model::NetId>& nets,
+                                                const std::function<bool(int, int)>& is_protected);
 
 }  // namespace tmk::passes
