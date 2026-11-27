@@ -2992,7 +2992,7 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
       const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
       const int open = r.unconnected_after_refill >= 0 ? r.unconnected_after_refill : r.result.connections - r.result.routed;
       const int walled = r.summary.contains("why_open") ? r.summary["why_open"].value("walled_in", 0) : 0;
-      const bool kept = open + walled < best_open + walled_before || (open + walled == best_open + walled_before && open < best_open);
+      const bool kept = open < best_open || (open == best_open && walled < walled_before);  // lexicographic (issue 57): a round never trades a routed connection for wall count
       rows.push_back({{"rung", fmt("rip walls round %d", round)}, {"open_before", best_open}, {"open_after", open},
                       {"walled_before", walled_before}, {"walled_after", walled}, {"ripped", ripped}, {"kept", kept},
                       {"copper_layers", r.summary.value("copper_layers", layers0)}, {"seconds", secs}});

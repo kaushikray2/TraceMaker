@@ -27,12 +27,12 @@
   rip:       the same recipe plus --finish-rip-walls, run twice. The two rip runs must be
              byte-identical (the phase is deterministic: proof, rip set and heal all are),
              and the rip result must not be worse than the baseline under the keep price
-             (open + walled, both priced by a --work 1 proof over each output board).
+             (lexicographic (open, walled), both priced by a --work 1 proof over each output board).
              A second board, generated in the test, walls one pad in with a ring of routed arcs so a rip
              round must actually run there: exactly one round, the four square tracks ripped, kept, and the
              connection closed (this is the coverage the hub board cannot give: its ladder completes).
              Any rip round rows in the finish list must obey the keep rule themselves:
-             a kept round improves open + walled (or ties it with fewer open), a discarded
+             a kept round improves (open, walled) lexicographically, a discarded
              round does not, and the final open count is the last kept round open_after.
 Exit 77 (skipped) when the fixture is missing.
 """
@@ -172,15 +172,13 @@ def main():
     check(rows_a == rows_b, "rip rows differ between the two runs")
 
     rip_open, rip_walled = price(tm, work, outs[0][0], "rip")
-    check(rip_open + rip_walled <= base_open + base_walled,
-          f"rip price {rip_open}+{rip_walled} worse than baseline {base_open}+{base_walled}")
+    check((rip_open, rip_walled) <= (base_open, base_walled),
+          f"rip price {(rip_open, rip_walled)} worse than baseline {(base_open, base_walled)}")
     check(outs[0][1]["finish"]["open"] == rip_open, "rip: finish open != proof open")
 
     expect_open = base_open
     for r in rows_a:
-        price_before = r["open_before"] + r["walled_before"]
-        price_after = r["open_after"] + r["walled_after"]
-        improves = price_after < price_before or (price_after == price_before and r["open_after"] < r["open_before"])
+        improves = r["open_after"] < r["open_before"] or (r["open_after"] == r["open_before"] and r["walled_after"] < r["walled_before"])
         check(r["kept"] == improves, f"rip row breaks the keep rule: {r}")
         check(r["open_before"] == expect_open, f"rip row open_before {r['open_before']} != running open {expect_open}")
         if r["kept"]:
