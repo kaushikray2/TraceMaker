@@ -4002,13 +4002,25 @@ struct Router::Impl {
   // one of the pair's own halves, not itself coupled (a coupled pair is moved only as a pair, by
   // the recouple pass), not protected by a running transaction, and not a bundle lane while
   // bundle escapes or package tunnels are in use - the guards commit() applies to a negotiated
-  // single's victims, restated for the pair's gate.
+  // single's victims, restated for the pair's gate. Issue 62 completed the restatement: the
+  // rip cap, the --first-nets protection and the bus rule were missing here (the victim-count
+  // cap is a property of the collected list and is checked at the collection site).
   bool victim_eligible(int v) const {
     if (v < 0 || v == pair_ia_now || v == pair_ib_now) return false;
     const auto& sv = cs[static_cast<std::size_t>(v)];
     if (!sv.routed || sv.coupled) return false;
     if (!txn_protect.empty() && txn_protect[static_cast<std::size_t>(v)]) return false;
     if ((opt.bundle_escape || opt.package_tunnels) && sv.bundle_lane) return false;
+    if (sv.rips >= rip_cap) return false;  // already ripped too often (commit()'s rip-cap guard)
+    const NetId vnet = sv.c.net;
+    // A --first-nets connection is displaced only by a pair that is itself a first-net pair.
+    if (first_net_ids.count(vnet) && !first_net_ids.count(cs[static_cast<std::size_t>(pair_ia_now)].c.net) &&
+        !first_net_ids.count(cs[static_cast<std::size_t>(pair_ib_now)].c.net))
+      return false;
+    // A bus connection is ripped by its own kind only (doc 05 §38, commit()'s bus guard).
+    if (!net_bus.empty() && bus_net(vnet) && !bus_net(cs[static_cast<std::size_t>(pair_ia_now)].c.net) &&
+        !bus_net(cs[static_cast<std::size_t>(pair_ib_now)].c.net))
+      return false;
     return true;
   }
 
@@ -4713,6 +4725,7 @@ struct Router::Impl {
           collect(ha);
           if (!blocked) collect(hb);
           bool eligible = !blocked;
+          if (eligible && opt.max_victims > 0 && static_cast<int>(victims.size()) > opt.max_victims) eligible = false;  // commit()'s victim-count cap (issue 62)
           if (eligible)
             for (const int v : victims)
               if (!victim_eligible(v)) {
@@ -4743,9 +4756,6 @@ struct Router::Impl {
             }
             bool restored = placed;
             if (restored) {
-              if (pair_split)
-                for (const PairHalf* h : {&ha, &hb})
-                  for (const auto& [layer, sg2] : h->segs) res.pair_void_samples += static_cast<long>(void_samples(layer, sg2.a, sg2.b));
               const int saved_current = current;
               const Miss saved_miss = last_miss;
               for (const int v : victims) {
@@ -4809,7 +4819,8 @@ struct Router::Impl {
               txn_restore(neg_snap);
               if (pending.size() > neg_pending) pending.resize(neg_pending);  // no stale queue entries from the rips (issue 60)
               pair_why = placed ? "a connection the pair displaced did not route again" : "negotiated pair failed its exact check after the rip";
-              break;
+              if (++finals >= 4) break;  // another goal candidate may displace a luckier victim set (issue 62)
+              continue;
             }
             if (pending.size() > neg_pending) pending.resize(neg_pending);  // everything the rips queued is routed again: the queue returns to its pre-attempt contents (issue 60)
             neg_committed = true;
@@ -4821,9 +4832,6 @@ struct Router::Impl {
           commit_half(ia, ha);
           if (half_legal(hb)) {  // now against the first half too
             commit_half(ib, hb);
-            if (pair_split)  // the void audit, extended to pair paths (issue 38 item 1)
-              for (const PairHalf* h : {&ha, &hb})
-                for (const auto& [layer, sg2] : h->segs) res.pair_void_samples += static_cast<long>(void_samples(layer, sg2.a, sg2.b));
             done = true;
             break;
           }
@@ -5051,6 +5059,12 @@ struct Router::Impl {
       ++res.routed;
       release_escapes(ci);
     }
+    // The void audit (issue 38 item 1) is charged only here, past every rollback point (the
+    // victim restore above and the straddled-pin check): TxnSnap does not carry the counter, so
+    // charging inside the transaction leaked the samples of a rolled-back pair (issue 62).
+    if (pair_split)
+      for (const PairHalf* h : {&ha, &hb})
+        for (const auto& [layer, sg2] : h->segs) res.pair_void_samples += static_cast<long>(void_samples(layer, sg2.a, sg2.b));
     return true;
   }
 
