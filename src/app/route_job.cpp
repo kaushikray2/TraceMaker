@@ -1009,7 +1009,7 @@ RouteJobResult run_route_job(RouteJob job) {
     log(fmt("tuning profile %s (net class %s, %s): routed at %.3f mm (the width on %s)%s", p->name.c_str(), c.name.c_str(),
             p->differential ? "differential pairs" : "single-ended", nm_to_mm(from->width), from->layer.c_str(),
             p->differential ? (excluded.empty() ? "" : fmt("; pairs kept off %zu layer%s with another width or gap", excluded.size(), excluded.size() == 1 ? "" : "s").c_str())
-                            : "; narrowed to each layer's width after routing"));
+                            : "; per-layer profile widths apply on the other layers"));
     if (tuning_summary.is_null()) tuning_summary = nlohmann::json::array();
     tuning_summary.push_back({{"net_class", c.name}, {"profile", p->name}, {"differential", p->differential}, {"route_width_mm", nm_to_mm(from->width)},
                               {"route_width_from", from->layer}, {"pair_gap_mm", p->differential ? nm_to_mm(from->gap) : 0.0}, {"layers", layers},
