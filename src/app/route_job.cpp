@@ -2403,6 +2403,7 @@ RouteJobResult run_route_job(RouteJob job) {
     log(fmt("differential pairs: %zu wanted, %d coupled pair routes (re-coupling included), %ld work units", want.size(), res.pairs, res.pair_work) +
         (res.pairs_over_share > 0 ? fmt(", %d attempts left to single routing (--pair-share)", res.pairs_over_share) : std::string()));
     if (res.pair_retried > 0) log(fmt("  %d of them coupled by the wider retry (--pair-retry-leg-mm)", res.pair_retried));
+    if (res.pair_negotiated > 0) log(fmt("  %d of them coupled by negotiation (--pair-negotiate)", res.pair_negotiated));
     out.summary["pair_work"] = res.pair_work;
     out.summary["pair_void_samples"] = res.pair_void_samples;
     for (const auto& [na, nb] : want) {

@@ -211,6 +211,11 @@ struct RouterOptions {
   // Negotiation never rips a half of a coupled pair (a ripped half takes its partner with it, and the pair is often
   // not coupled again): the route that would rip it fails instead, as one that would rip a bus does.
   bool protect_coupled = false;
+  // Coupled pairs negotiate (issue 38 item 3): when no coupled path exists, one more attempt lets
+  // the coupled search cross routed copper, and the pair is kept only if every connection it
+  // displaces routes again (a transaction, as txn_try is for singles). Off by default: on boards
+  // whose pairs couple unaided it would spend search the strict attempt did not need.
+  bool pair_negotiate = false;
   // Work units the clean-up re-coupling of split pairs may spend past the search budget (0 = none: it runs only on
   // budget left over, as before D175). Under a time limit the allowance is converted to time at the run's own work
   // rate. Used only when pairs are routed; on the 20 pair boards of doc 05 §77 it coupled two more pairs and changed
@@ -425,6 +430,7 @@ struct RouteResult {
   int pairs = 0;
   int pairs_over_share = 0;     // pair attempts skipped because the pair searches had spent RouterOptions::pair_share of the budget
   int pair_retried = 0;  // pairs coupled by the wider retry (RouterOptions::pair_retry_leg)
+  int pair_negotiated = 0;  // pairs coupled by the negotiated attempt (RouterOptions::pair_negotiate)
   int length_tuned = 0;
   // Buses: connections routed as a lane of their group (leaders and the members that followed one), and connections
   // of a group routed otherwise ("left the bus"), in the state returned.

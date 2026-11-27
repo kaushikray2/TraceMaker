@@ -1276,6 +1276,7 @@ static int run_main(int argc, char** argv) {
   route->add_option("--pair-leg-mm", r_pair_leg_mm, "Coupled pairs: longest reach of the uncoupled legs from the pads to the coupled section (default 2.5)")
       ->check(CLI::Range(0.6, 50.0));
   route->add_flag("--protect-coupled", ropt.protect_coupled, "Coupled pairs: negotiation never rips a half of a coupled pair (the route that would fails instead)");
+  route->add_flag("--pair-negotiate", ropt.pair_negotiate, "Coupled pairs: when no coupled path exists, try once more letting the pair displace routed connections, kept only if every displaced connection routes again");
   route->add_option("--recouple-work", ropt.recouple_work, "Coupled pairs: work units the clean-up re-coupling of split pairs may spend past the budget (default 2000000, 0 = none)")
       ->check(CLI::NonNegativeNumber);
   double r_pair_retry_leg_mm = 0;

@@ -3998,6 +3998,20 @@ struct Router::Impl {
   // leg is legal, the same shapes after a straight exit from the pad centre along any of 8 directions, out to
   // pad_r + width, 2 pad_r + width or 4 pad_r + width: an end pad flanked by pads of other nets is entered only from
   // its free side (issue #67, D175).
+  // A connection the running negotiated pair attempt may displace (issue 38 item 3): routed, not
+  // one of the pair's own halves, not itself coupled (a coupled pair is moved only as a pair, by
+  // the recouple pass), not protected by a running transaction, and not a bundle lane while
+  // bundle escapes or package tunnels are in use - the guards commit() applies to a negotiated
+  // single's victims, restated for the pair's gate.
+  bool victim_eligible(int v) const {
+    if (v < 0 || v == pair_ia_now || v == pair_ib_now) return false;
+    const auto& sv = cs[static_cast<std::size_t>(v)];
+    if (!sv.routed || sv.coupled) return false;
+    if (!txn_protect.empty() && txn_protect[static_cast<std::size_t>(v)]) return false;
+    if ((opt.bundle_escape || opt.package_tunnels) && sv.bundle_lane) return false;
+    return true;
+  }
+
   std::optional<PairLeg> pair_leg(Point p, Point X, Dir2 a, Dir2 n, int layer, NetId net, Coord w, long& checks, Coord pad_r = 0) {
     std::vector<std::vector<Point>> cand;
     std::optional<Point> head;  // a pad exit before the leg proper
@@ -4043,7 +4057,19 @@ struct Router::Impl {
           bool good = true;
           for (std::size_t k = from; k + 1 < v.size() && good; ++k) {
             ++checks;
-            good = obs->segment_state(v[k], v[k + 1], layer, ww, net, false, nullptr) == 0;
+            if (pair_neg_now) {  // a leg may cross copper the pair may displace; the victims are collected exactly from the built halves before anything is ripped (issue 38 item 3)
+              std::vector<int> owners;
+              const int code = obs->segment_state(v[k], v[k + 1], layer, ww, net, true, &owners);
+              good = code != 2;
+              if (good && code == 1)
+                for (const int o : owners)
+                  if (!victim_eligible(o)) {
+                    good = false;
+                    break;
+                  }
+            } else {
+              good = obs->segment_state(v[k], v[k + 1], layer, ww, net, false, nullptr) == 0;
+            }
           }
           if (good) return PairLeg{v, ww, len};
         }
@@ -4150,6 +4176,10 @@ struct Router::Impl {
   // Leg reach and pad exits of the pair attempt now running (route_pair sets them; issue #67, D175).
   Coord leg_max_now = 2'500'000;
   bool pad_exits_now = false;
+  // The negotiated pair attempt now running (issue 38 item 3): pair_leg's soft legality and the
+  // victim gate read these. pair_ia_now/pair_ib_now are its two connections.
+  bool pair_neg_now = false;
+  int pair_ia_now = -1, pair_ib_now = -1;
   // A pair attempt at the configured leg reach (--pair-leg-mm) and pad exits (--pair-pad-exits). With
   // --pair-retry-leg-mm, one that finds no coupled path is tried again with legs of up to that reach, then with pad
   // exits at the configured reach. Pairs the first attempt couples are routed exactly as without the retry.
@@ -4168,12 +4198,23 @@ struct Router::Impl {
       }
       if (ok) ++res.pair_retried;
     }
+    if (!ok && opt.pair_negotiate && (pair_why == "no coupled path" || pair_why == "exact check of the finished pair") && !out_of_budget()) {
+      // One negotiated attempt: the coupled search may cross routed copper, and the pair is kept
+      // only if every connection it displaces routes again (issue 38 item 3).
+      leg_max_now = opt.pair_leg_max;
+      pad_exits_now = opt.pair_pad_exits;
+      ok = route_pair_at(ia, ib, true);
+      if (ok) ++res.pair_negotiated;
+    }
     leg_max_now = opt.pair_leg_max;
     pad_exits_now = opt.pair_pad_exits;
     return ok;
   }
-  bool route_pair_at(int ia, int ib) {
+  bool route_pair_at(int ia, int ib, bool negotiate = false) {
     exit_cache.clear();
+    pair_neg_now = negotiate;
+    pair_ia_now = ia;
+    pair_ib_now = ib;
     const Connection& A = cs[static_cast<std::size_t>(ia)].c;
     Connection B = cs[static_cast<std::size_t>(ib)].c;
     auto d = [](Point u, Point v) { return std::hypot(static_cast<double>(u.x - v.x), static_cast<double>(u.y - v.y)); };
@@ -4274,6 +4315,10 @@ struct Router::Impl {
     // turns that follow the straight line to the goal over one diagonal and one straight run.
     const std::int64_t bend_cost = static_cast<std::int64_t>(K) * pitch;
     const std::int64_t via_pair_cost = 2 * static_cast<std::int64_t>(opt.via_cost_mm * 1e6);
+    // Negotiated attempt (issue 38 item 3): the price of one segment that crosses routed copper the
+    // pair may displace, charged per segment into relax() like the reference-void term - never into
+    // a legality memo, whose boolean cannot carry it.
+    const std::int64_t soft_pen = 8 * step;
     const bool vias_ok = opt.allow_vias && nl > 1 && this->vias_ok(A.net) && this->vias_ok(B.net);
     // Cost-to-go: the centreline still has to get within reach of the end pads (legs cost more than coupled track,
     // so the straight distance is a lower bound), weighted a little for focus (pairs need not be optimal, only legal).
@@ -4424,6 +4469,26 @@ struct Router::Impl {
       pq.push({g + hcost(c, l), seq++, 0, k});
     };
     auto seg_ok = [&](Point p, Point q, int l, NetId net) { return p == q || (layer_ok(net, l) && obs->segment_state(p, q, l, w, net, false, nullptr) == 0); };
+    // The negotiated attempt's legality: a segment is soft-legal when everything it crosses is
+    // routed copper of a connection the pair may displace (victim_eligible); fixed copper, holes,
+    // edges and keepouts still block outright (state 2). soft_hits counts the soft segments of the
+    // move being priced; the move sites reset it and relax() is charged soft_hits * soft_pen.
+    int soft_hits = 0;
+    std::vector<int> soft_owners;
+    auto seg_soft = [&](Point p, Point q, int l, NetId net) {
+      if (!negotiate) return seg_ok(p, q, l, net);
+      if (p == q) return true;
+      if (!layer_ok(net, l)) return false;
+      soft_owners.clear();
+      const int code = obs->segment_state(p, q, l, w, net, true, &soft_owners);
+      if (code == 2) return false;
+      if (code == 1) {
+        for (const int v : soft_owners)
+          if (!victim_eligible(v)) return false;
+        ++soft_hits;
+      }
+      return true;
+    };
     auto delta = [&](int dd, int k, int& gx, int& gy) {
       gx += k * kDx[dd];
       gy += k * kDy[dd];
@@ -4543,6 +4608,10 @@ struct Router::Impl {
     pair_why = "no coupled path";
     bool done = false;
     PairHalf ha, hb;
+    // Negotiated attempt: the snapshot a committed displacement rolls back to (the boxed-pin check
+    // at the tail included), taken when the first goal with victims is committed.
+    TxnSnap neg_snap;
+    bool neg_committed = false;
     // Goal candidates wait in their own queue (by estimated total cost) and are checked in turn with the states: when
     // the best of them is no dearer than the best state, and at least every 16 expansions, so a found end is used
     // as soon as its legs are legal (the first legal goal is taken: pairs need to be legal, not optimal).
@@ -4576,6 +4645,102 @@ struct Router::Impl {
         hb = PairHalf{};
         build(cd, ha, hb);
         if (!halves_clear(ha, hb, pr.required_gap, obs->via_mask())) continue;
+        if (negotiate) {
+          // Exact victim collection over the built halves, legs included: the search's soft
+          // legality was approximate (it prices crossings, it does not record them), so this pass
+          // is authoritative. Fixed copper anywhere in the halves ends this goal, as does a
+          // victim the pair may not displace.
+          std::vector<int> victims, owners;
+          bool blocked = false;
+          auto collect = [&](const PairHalf& h) {
+            for (const auto& [layer, sg2] : h.segs) {
+              owners.clear();
+              const int code = obs->segment_state(sg2.a, sg2.b, layer, sg2.w, h.net, true, &owners);
+              if (code == 2) {
+                blocked = true;
+                return;
+              }
+              if (code == 1)
+                for (const int o : owners)
+                  if (std::find(victims.begin(), victims.end(), o) == victims.end()) victims.push_back(o);
+            }
+            for (const PairVia& v : h.vias) {
+              owners.clear();
+              const int code = v.type == model::ViaType::Through ? obs->via_state(v.pos, v.size, v.drill, h.net, 0, true, &owners)
+                                                                 : obs->via_state_span(v.pos, v.size, v.drill, h.net, 0, true, &owners, v.top, v.bot, v.type);
+              if (code == 2) {
+                blocked = true;
+                return;
+              }
+              if (code == 1)
+                for (const int o : owners)
+                  if (std::find(victims.begin(), victims.end(), o) == victims.end()) victims.push_back(o);
+            }
+          };
+          collect(ha);
+          if (!blocked) collect(hb);
+          bool eligible = !blocked;
+          if (eligible)
+            for (const int v : victims)
+              if (!victim_eligible(v)) {
+                eligible = false;
+                break;
+              }
+          if (!eligible) {
+            pair_why = "negotiated path crosses copper it may not displace";
+            if (++finals >= 4) break;
+            continue;
+          }
+          if (!victims.empty()) {
+            // The pair is kept only if every displaced connection routes again (transaction,
+            // rule 4): snapshot, rip, commit the pair against the cleared board, re-route the
+            // victims strictly; any failure restores the snapshot exactly and ends the attempt.
+            neg_snap = txn_capture();
+            for (const int v : victims) rip(v);
+            bool placed = half_legal(ha) && half_legal(hb);
+            if (placed) {
+              commit_half(ia, ha);
+              placed = half_legal(hb);
+              if (placed) commit_half(ib, hb);
+            }
+            bool restored = placed;
+            if (restored) {
+              if (pair_split)
+                for (const PairHalf* h : {&ha, &hb})
+                  for (const auto& [layer, sg2] : h->segs) res.pair_void_samples += static_cast<long>(void_samples(layer, sg2.a, sg2.b));
+              const int saved_current = current;
+              const Miss saved_miss = last_miss;
+              for (const int v : victims) {
+                if (cs[static_cast<std::size_t>(v)].routed) continue;
+                if (out_of_budget()) {
+                  restored = false;
+                  break;
+                }
+                current = v;
+                expansion_cap = opt.txn_cap;
+                const bool again = search_and_commit(cs[static_cast<std::size_t>(v)].c, false);
+                expansion_cap = 0;
+                if (again) {
+                  cs[static_cast<std::size_t>(v)].routed = true;
+                  ++res.routed;
+                } else {
+                  restored = false;
+                  break;
+                }
+              }
+              current = saved_current;
+              last_miss = saved_miss;
+            }
+            if (!restored) {
+              txn_restore(neg_snap);
+              pair_why = placed ? "a connection the pair displaced did not route again" : "negotiated pair failed its exact check after the rip";
+              break;
+            }
+            neg_committed = true;
+            done = true;
+            break;
+          }
+        }
         if (half_legal(ha) && half_legal(hb)) {
           commit_half(ia, ha);
           if (half_legal(hb)) {  // now against the first half too
@@ -4642,7 +4807,7 @@ struct Router::Impl {
         if (in_win(gx, gy) && obs->inside_board(at(gx, gy), 0)) {
           const std::uint64_t nk = key(x.l, gx, gy, x.dd, x.s);
           bool good;
-          if (k == 1) {
+          if (k == 1 && !negotiate) {
             auto& memo = straight_ok[nk];
             if (memo == 0) {
               const Point c2 = at(gx, gy);
@@ -4654,10 +4819,11 @@ struct Router::Impl {
             good = memo == 1;
           } else {
             const Point c2 = at(gx, gy);
-            good = seg_ok(offset_point(c, n, off), offset_point(c2, n, off), x.l, net_of(1, x.s)) &&
-                   seg_ok(offset_point(c, n, -off), offset_point(c2, n, -off), x.l, net_of(-1, x.s));
+            soft_hits = 0;
+            good = seg_soft(offset_point(c, n, off), offset_point(c2, n, off), x.l, net_of(1, x.s)) &&
+                   seg_soft(offset_point(c, n, -off), offset_point(c2, n, -off), x.l, net_of(-1, x.s));
           }
-          if (good) relax(nk, g + k * steplen(x.dd, x.l), q.id, -1, kStraight, at(gx, gy), x.l, x.dd);
+          if (good) relax(nk, g + k * steplen(x.dd, x.l) + soft_hits * soft_pen, q.id, -1, kStraight, at(gx, gy), x.l, x.dd);
         }
       }
       // 45-degree turns, each followed by K straight steps.
@@ -4670,13 +4836,14 @@ struct Router::Impl {
           const Point c2 = at(gx, gy);
           const Dir2 n2 = left_normal(d2);
           bool good = true;
+          soft_hits = 0;
           for (const double sg : {1.0, -1.0}) {
             if (!good) break;
             const NetId net = net_of(sg, x.s);
             const Point M = miter_point(c, x.dd, d2, sg * off);
-            good = seg_ok(offset_point(c, n, sg * off), M, x.l, net) && seg_ok(M, offset_point(c2, n2, sg * off), x.l, net);
+            good = seg_soft(offset_point(c, n, sg * off), M, x.l, net) && seg_soft(M, offset_point(c2, n2, sg * off), x.l, net);
           }
-          if (good) relax(key(x.l, gx, gy, d2, x.s), g + K * steplen(d2, x.l) + bend_cost, q.id, -1, kTurn, c2, x.l, d2);
+          if (good) relax(key(x.l, gx, gy, d2, x.s), g + K * steplen(d2, x.l) + bend_cost + soft_hits * soft_pen, q.id, -1, kTurn, c2, x.l, d2);
         }
       // Coupled via pair: jog out to the via spacing, change layer, jog back. A transition the board allows as
       // micro vias (outer layer to the next, both nets, dimensions defined) is also tried at the micro spacing,
@@ -4693,16 +4860,27 @@ struct Router::Impl {
             delta(x.dd, mv2, gx, gy);
             if (!in_win(gx, gy) || !obs->inside_board(at(gx, gy), 0)) return;
             const Point c2 = at(gx, gy);
+            soft_hits = 0;
             for (const double sg : {1.0, -1.0}) {
               const NetId net = net_of(sg, x.s);
               const Point P = offset_point(c, n, sg * off);
               const Point V = offset_point(offset_point(c, u, hj2), n, sg * static_cast<double>(voff));
               const Point Q = offset_point(offset_point(c, u, 2 * hj2), n, sg * off);
-              const int vs = vt == model::ViaType::Through ? obs->via_state(V, vd2, vdr2, net, 0, false, nullptr)
-                                                           : obs->via_state_span(V, vd2, vdr2, net, 0, false, nullptr, lo, hi, vt);
-              if (!(seg_ok(P, V, x.l, net) && vs == 0 && seg_ok(V, Q, l2, net) && seg_ok(Q, offset_point(c2, n, sg * off), l2, net))) return;
+              soft_owners.clear();
+              const int vs = vt == model::ViaType::Through ? obs->via_state(V, vd2, vdr2, net, 0, negotiate, &soft_owners)
+                                                           : obs->via_state_span(V, vd2, vdr2, net, 0, negotiate, &soft_owners, lo, hi, vt);
+              bool vok = negotiate ? vs != 2 : vs == 0;
+              if (vok && negotiate && vs == 1) {
+                for (const int o : soft_owners)
+                  if (!victim_eligible(o)) {
+                    vok = false;
+                    break;
+                  }
+                if (vok) ++soft_hits;
+              }
+              if (!(seg_soft(P, V, x.l, net) && vok && seg_soft(V, Q, l2, net) && seg_soft(Q, offset_point(c2, n, sg * off), l2, net))) return;
             }
-            relax(key(l2, gx, gy, x.dd, x.s), g + mv2 * steplen(x.dd, l2) + via_pair_cost, q.id, -1, kVia, c2, l2, x.dd, vkind);
+            relax(key(l2, gx, gy, x.dd, x.s), g + mv2 * steplen(x.dd, l2) + via_pair_cost + soft_hits * soft_pen, q.id, -1, kVia, c2, l2, x.dd, vkind);
           };
           if (pr.micro_diameter > 0 && micro_for(A.net) && micro_for(B.net) && micro_span(x.l, l2))
             attempt(pr.micro_via_offset, pr.micro_diameter, pr.micro_drill, model::ViaType::Micro, 2);
@@ -4728,18 +4906,32 @@ struct Router::Impl {
               return tblind ? obs->via_state_span(V, pr.via_diameter, pr.via_drill, net, 0, false, nullptr, tlo, thi)
                             : obs->via_state(V, pr.via_diameter, pr.via_drill, net, 0, false, nullptr);
             };
+            auto vstate_soft = [&](Point V, NetId net) {
+              if (!negotiate) return vstate(V, net) == 0;
+              soft_owners.clear();
+              const int code = tblind ? obs->via_state_span(V, pr.via_diameter, pr.via_drill, net, 0, true, &soft_owners, tlo, thi)
+                                      : obs->via_state(V, pr.via_diameter, pr.via_drill, net, 0, true, &soft_owners);
+              if (code == 2) return false;
+              if (code == 1) {
+                for (const int o : soft_owners)
+                  if (!victim_eligible(o)) return false;
+                ++soft_hits;
+              }
+              return true;
+            };
+            soft_hits = 0;
             const bool good =
                 // right half
-                seg_ok(pt(0, -off), VR, x.l, nr_) && vstate(VR, nr_) == 0 &&
-                seg_ok(VR, pt(hj + twD / 2, -vo), l2, nr_) && seg_ok(pt(hj + twD / 2, -vo), pt(hj + 1.5 * twD, off), l2, nr_) &&
-                seg_ok(pt(hj + 1.5 * twD, off), pt(twT, off), l2, nr_) && seg_ok(pt(twT, off), offset_point(c2, n, off), l2, nr_) &&
+                seg_soft(pt(0, -off), VR, x.l, nr_) && vstate_soft(VR, nr_) &&
+                seg_soft(VR, pt(hj + twD / 2, -vo), l2, nr_) && seg_soft(pt(hj + twD / 2, -vo), pt(hj + 1.5 * twD, off), l2, nr_) &&
+                seg_soft(pt(hj + 1.5 * twD, off), pt(twT, off), l2, nr_) && seg_soft(pt(twT, off), offset_point(c2, n, off), l2, nr_) &&
                 // left half
-                seg_ok(pt(0, off), pt(hj + twD / 2, off), x.l, nl_) && seg_ok(pt(hj + twD / 2, off), pt(hj + 1.5 * twD, -vo), x.l, nl_) &&
-                seg_ok(pt(hj + 1.5 * twD, -vo), VL, x.l, nl_) && vstate(VL, nl_) == 0 &&
-                seg_ok(VL, pt(twT, -off), l2, nl_) && seg_ok(pt(twT, -off), offset_point(c2, n, -off), l2, nl_);
+                seg_soft(pt(0, off), pt(hj + twD / 2, off), x.l, nl_) && seg_soft(pt(hj + twD / 2, off), pt(hj + 1.5 * twD, -vo), x.l, nl_) &&
+                seg_soft(pt(hj + 1.5 * twD, -vo), VL, x.l, nl_) && vstate_soft(VL, nl_) &&
+                seg_soft(VL, pt(twT, -off), l2, nl_) && seg_soft(pt(twT, -off), offset_point(c2, n, -off), l2, nl_);
             // Dearer than a plain via pair by its uncoupled length: used only where the pin order calls for it.
             if (good)
-              relax(key(l2, gx, gy, x.dd, 1 - x.s), g + MT * steplen(x.dd, l2) + via_pair_cost + leg_weight * static_cast<std::int64_t>(2.0 * twD), q.id, -1, kTwist, c2, l2, x.dd);
+              relax(key(l2, gx, gy, x.dd, 1 - x.s), g + MT * steplen(x.dd, l2) + via_pair_cost + leg_weight * static_cast<std::int64_t>(2.0 * twD) + soft_hits * soft_pen, q.id, -1, kTwist, c2, l2, x.dd);
           }
         }
       }
@@ -4761,8 +4953,12 @@ struct Router::Impl {
     }
     for (std::size_t k = 0; k < straddled.size(); ++k)
       if (!boxed_before[k] && pin_boxed_in(straddled[k])) {
-        lift_items(ia);
-        lift_items(ib);
+        if (neg_committed) {
+          txn_restore(neg_snap);  // a negotiated pair that is taken back takes its whole transaction back (issue 38 item 3)
+        } else {
+          lift_items(ia);
+          lift_items(ib);
+        }
         pair_why = "would enclose pin " + pad_label(straddled[k]) + " between the halves";
         return false;
       }

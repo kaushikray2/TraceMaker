@@ -149,6 +149,7 @@ Options:
   --pair-leg-mm FLOAT:FLOAT in [0.6 - 50]
                               Coupled pairs: longest reach of the uncoupled legs from the pads to the coupled section (default 2.5)
   --protect-coupled           Coupled pairs: negotiation never rips a half of a coupled pair (the route that would fails instead)
+  --pair-negotiate            Coupled pairs: when no coupled path exists, try once more letting the pair displace routed connections, kept only if every displaced connection routes again
   --recouple-work INT:NONNEGATIVE
                               Coupled pairs: work units the clean-up re-coupling of split pairs may spend past the budget (default 2000000, 0 = none)
   --pair-retry-leg-mm FLOAT:FLOAT in [0 - 50]
