@@ -406,16 +406,28 @@ TEST_CASE("net classes from rules: computed widths become classes for Default-cl
   CHECK(usb->cls.has_diff_pair_gap);
   CHECK(usb->cls.name.starts_with("tmk_USB2-01_"));
   // Issue 37: every solved layer width survives into the per-layer maps (the scalar above keeps
-  // only the front layer solution); differential lines also fill the pair maps.
+  // only the front layer solution); differential lines also fill the pair maps. The track map
+  // carries the pair solution on layers that have one - the width the class routes the net at,
+  // exactly as the scalar track_width above carries the front layer's pair width; a layer with
+  // only a single-ended solution keeps that width in the track map.
+  int diff_layers = 0;
   for (const auto& L : e->impedance->lines) {
     if (!L.ok) continue;
     REQUIRE(usb->cls.track_width_on.count(L.layer));
-    CHECK(usb->cls.track_width_on.at(L.layer) == L.width);
     if (L.differential) {
+      ++diff_layers;
+      CHECK(usb->cls.track_width_on.at(L.layer) == L.width);
       REQUIRE(usb->cls.diff_pair_width_on.count(L.layer));
       CHECK(usb->cls.diff_pair_width_on.at(L.layer) == L.width);
       CHECK(usb->cls.diff_pair_gap_on.at(L.layer) == L.gap);
     }
+  }
+  REQUIRE(diff_layers > 0);
+  for (const auto& L : e->impedance->lines) {
+    if (!L.ok || L.differential) continue;
+    bool covered = false;
+    for (const auto& D : e->impedance->lines) covered = covered || (D.ok && D.differential && D.layer == L.layer);
+    if (!covered) CHECK(usb->cls.track_width_on.at(L.layer) == L.width);
   }
   // Applied: the two nets resolve to the class, every other net stays in Default.
   const model::DesignRules with = with_synthetic_classes(b, rules, sc);

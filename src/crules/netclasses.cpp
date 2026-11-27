@@ -32,10 +32,17 @@ std::vector<SyntheticClass> synthetic_net_classes(const model::Board& b, const m
       bool inner_differs = false;
       for (const auto& l : e.impedance->lines) {
         if (!l.ok) continue;
-        width_on[l.layer] = l.width;
         if (l.differential) pair_width_on[l.layer] = l.width, pair_gap_on[l.layer] = l.gap;
         if (!outer) outer = &l;  // lines are in copper order: the first solved layer is the front
         else if (l.width != outer->width || l.gap != outer->gap) inner_differs = true;
+      }
+      // The per-layer track width is the width the class routes the net at on that layer: for a
+      // differential rule that is the pair solution - the scalar class below does the same with
+      // the front layer's pair width. A single-ended solution (the width a lone trace would need
+      // for the single-ended target) fills only layers the pair solution does not cover.
+      for (const auto& l : e.impedance->lines) {
+        if (!l.ok) continue;
+        if (l.differential || !pair_width_on.count(l.layer)) width_on[l.layer] = l.width;
       }
       if (!outer) continue;
       width = outer->width;
