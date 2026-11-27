@@ -34,9 +34,11 @@ struct PairRule {
 };
 
 // `via_mask`: solder-mask expansion of untented vias (route::Obstacles::via_mask()); two vias then need their mask
-// openings apart as well.
+// openings apart as well. `layer`: a copper layer name - where the classes carry solved per-layer pair widths or
+// gaps (issue 37's maps), they replace the class-derived width and gap for that layer (issue 38 item 3c); the
+// empty name, and layers without entries, give the scalar rule.
 PairRule pair_rule(const model::Board& b, const model::DesignRules& rules, const drc::RuleEngine& re, model::NetId a, model::NetId c,
-                   Coord via_mask = 0);
+                   Coord via_mask = 0, const std::string& layer = "");
 
 // Octilinear unit direction d (0..7, E, NE, N, NW, W, SW, S, SE with y down) and its left normal, as doubles.
 struct Dir2 { double x, y; };

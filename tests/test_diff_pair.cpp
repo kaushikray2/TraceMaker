@@ -367,3 +367,117 @@ TEST_CASE("pair legs: --pair-retry-leg-mm retries a failed pair with long legs a
   CHECK(flanked.pair_retried == 1);
   CHECK(flanked.routed == flanked.connections);
 }
+
+TEST_CASE("pair rule: per-layer widths and gaps from the class maps (issue 38 item 3c)", "[diffpair]") {
+  auto r = rules_with(200'000, true, 180'000, 150'000);
+  r.classes[0].diff_pair_width_on = {{"F.Cu", 180'000}, {"In1.Cu", 120'000}};
+  r.classes[0].diff_pair_gap_on = {{"In1.Cu", 190'000}};
+  const auto b = two_nets("/TMDS_0_P", "/TMDS_0_N");
+  const drc::RuleEngine re(b, r);
+  const auto scalar = route::pair_rule(b, r, re, 1, 2);
+  CHECK(scalar.width == 180'000);
+  CHECK(scalar.gap == 150'000);
+  const auto f = route::pair_rule(b, r, re, 1, 2, 0, "F.Cu");
+  CHECK(f.width == 180'000);
+  CHECK(f.gap == 150'000);  // no gap entry for F.Cu: the scalar gap stands
+  CHECK(f.offset == scalar.offset);
+  const auto in1 = route::pair_rule(b, r, re, 1, 2, 0, "In1.Cu");
+  CHECK(in1.width == 120'000);
+  CHECK(in1.gap == 190'000);  // the layer's solved gap, above the required 150'000
+  CHECK(2 * in1.offset - in1.width >= in1.gap);
+  CHECK(2 * in1.offset - in1.width <= in1.gap + 3'000);
+  CHECK(in1.via_offset >= in1.offset);
+  const auto bcu = route::pair_rule(b, r, re, 1, 2, 0, "B.Cu");
+  CHECK(bcu.width == scalar.width);  // a layer without entries is the scalar rule, unchanged
+  CHECK(bcu.gap == scalar.gap);
+  CHECK(bcu.offset == scalar.offset);
+  CHECK(bcu.via_offset == scalar.via_offset);
+  // The track-width map supplies the pair width only where the class names no diff-pair width.
+  auto r2 = rules_with(200'000, false, 0, 0);
+  r2.classes[0].track_width_on = {{"In1.Cu", 130'000}};
+  const drc::RuleEngine re2(b, r2);
+  CHECK(route::pair_rule(b, r2, re2, 1, 2, 0, "In1.Cu").width == 130'000);
+  CHECK(route::pair_rule(b, r2, re2, 1, 2, 0, "F.Cu").width == 250'000);
+}
+
+namespace {
+
+// Issue 38 item 3c: 36 x 16 mm, four layers. The pair's pads sit on F.Cu, which a locked wall
+// severs; In2.Cu and B.Cu are banded over, so the pair can only cross on In1.Cu - through the
+// 1.0 mm clear gap of a locked barrier there. At the scalar pair width (0.25 mm, gap 0.20,
+// clearance 0.20) the coupled span needs 1.10 mm and cannot pass; at the per-layer In1.Cu width
+// (0.15 mm) it needs 0.90 mm and can. Blind vias F.Cu<->In1.Cu are the only transitions.
+model::Board slot_pair() {
+  std::string s = R"((kicad_pcb (version 20240108) (generator "pcbnew")
+  (general (thickness 1.6))
+  (layers (0 "F.Cu" signal) (1 "In1.Cu" signal) (2 "In2.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (net 0 "") (net 1 "D_P") (net 2 "D_N") (net 3 "W") (net 4 "B")
+)";
+  auto seg = [&s](double x0, double y0, double x1, double y1, double w, const char* layer, int net) {
+    s += "  (segment (start " + std::to_string(x0) + " " + std::to_string(y0) + ") (end " + std::to_string(x1) + " " +
+         std::to_string(y1) + ") (width " + std::to_string(w) + ") (locked yes) (layer \"" + layer + "\") (net " +
+         std::to_string(net) + "))\n";
+  };
+  for (const int x : {3, 33}) {
+    const std::string ref = x == 3 ? "U1" : "U2", at = std::to_string(x);
+    s += "  (footprint \"T:P\" (layer \"F.Cu\") (at " + at + " 8) (property \"Reference\" \"" + ref + "\")\n"
+         "    (pad \"1\" smd rect (at 0 -0.275) (size 1 0.3) (layers \"F.Cu\") (net 1 \"D_P\"))\n"
+         "    (pad \"2\" smd rect (at 0 0.275) (size 1 0.3) (layers \"F.Cu\") (net 2 \"D_N\")))\n";
+  }
+  seg(18, 0, 18, 16, 0.5, "F.Cu", 3);      // the wall severing F.Cu
+  seg(0, 8, 36, 8, 16, "In2.Cu", 4);      // bands: In2.Cu and B.Cu are unusable
+  seg(0, 8, 36, 8, 16, "B.Cu", 4);
+  seg(18, 0, 18, 7.35, 0.3, "In1.Cu", 4);  // the In1.Cu barrier: copper reaches y 7.5 and y 8.5,
+  seg(18, 8.65, 18, 16, 0.3, "In1.Cu", 4); // leaving a 1.0 mm clear gap at the pair's height
+  s += "  (gr_rect (start 0 0) (end 36 16) (stroke (width 0.1) (type default)) (fill none) (layer \"Edge.Cuts\"))\n)\n";
+  return io::read_board(sexpr::Document::parse(s));
+}
+
+route::RouteResult route_slot(const model::Board& b, bool per_layer) {
+  model::DesignRules r;
+  model::NetClass k;
+  k.name = "Default";
+  k.clearance = 200'000;
+  k.track_width = 250'000;
+  k.has_diff_pair_gap = true;
+  k.diff_pair_width = 250'000;
+  k.diff_pair_gap = 200'000;
+  k.via_diameter = 500'000;
+  k.via_drill = 250'000;
+  if (per_layer) k.diff_pair_width_on["In1.Cu"] = 150'000;
+  r.classes.push_back(k);
+  r.minimums.allow_blind_buried_vias = true;
+  route::RouterOptions o;
+  o.work_budget = 3'000'000;
+  o.time_limit_s = 600;
+  o.gpu_device = -1;
+  o.blind_vias = true;
+  o.pair_nets = {{b.net_by_name("D_P"), b.net_by_name("D_N")}};
+  return route::Router(b, r, o).run();
+}
+
+}  // namespace
+
+TEST_CASE("pair search: a coupled run uses the width of the layer it is on (issue 38 item 3c)", "[diffpair][route]") {
+  const auto b = slot_pair();
+  const auto scalar = route_slot(b, false);
+  CHECK(scalar.pairs == 0);  // the slot refuses the scalar width: the pair is left uncoupled
+  const auto layered = route_slot(b, true);
+  REQUIRE(layered.pairs == 1);
+  CHECK(layered.routed == layered.connections);
+  int in1 = 0, fcu = 0;
+  for (const auto& t : layered.tracks) {
+    if (t.net != 1 && t.net != 2) continue;
+    if (t.layer == 1) {
+      ++in1;
+      CHECK(t.width == 150'000);  // every In1.Cu segment of the pair is stamped at the layer's width
+    }
+    if (t.layer == 0) {
+      ++fcu;
+      CHECK(t.width == 250'000);
+    }
+  }
+  CHECK(in1 > 0);
+  CHECK(fcu > 0);
+}

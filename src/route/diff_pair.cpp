@@ -23,7 +23,7 @@ Coord ceil_half(Coord v) { return (v + 1) / 2; }
 
 }  // namespace
 
-PairRule pair_rule(const model::Board& b, const model::DesignRules& rules, const drc::RuleEngine& re, NetId a, NetId c, Coord via_mask) {
+PairRule pair_rule(const model::Board& b, const model::DesignRules& rules, const drc::RuleEngine& re, NetId a, NetId c, Coord via_mask, const std::string& layer) {
   const auto& na = rules.class_for(b.nets[static_cast<std::size_t>(a)].name);
   const auto& nc = rules.class_for(b.nets[static_cast<std::size_t>(c)].name);
   const auto& m = rules.minimums;
@@ -32,12 +32,13 @@ PairRule pair_rule(const model::Board& b, const model::DesignRules& rules, const
   // on the net raises it (opt wins when given). The wider of the two halves' classes, never below the board minimum.
   auto class_w = [](const model::NetClass& k) { return k.has_diff_pair_gap ? k.diff_pair_width : k.track_width; };
   Coord w = std::max({class_w(na), class_w(nc), m.track_width});
+  Coord raise = 0;  // net-level track_width rules: they raise the width on every layer alike (used again below)
   for (NetId n : {a, c})
     if (const auto k = re.net_constraint(n, "track_width")) {
-      if (k->opt) w = std::max(w, *k->opt);
-      if (k->min) w = std::max(w, *k->min);
+      if (k->opt) raise = std::max(raise, *k->opt);
+      if (k->min) raise = std::max(raise, *k->min);
     }
-  r.width = w;
+  r.width = w = std::max(w, raise);
   // The clearance KiCad requires between the halves: the class clearance, relaxed to the class diff-pair gap only for
   // pairs it recognises by name (drc::RuleEngine::clearance does the same), never below the board minimum.
   const Coord clr = std::max(na.clearance, nc.clearance);
@@ -65,6 +66,28 @@ PairRule pair_rule(const model::Board& b, const model::DesignRules& rules, const
     r.source = "rule";
   }
   r.gap = std::max(gap, req);
+  // Per-layer geometry (issue 38 item 3c): the classes' solved per-layer pair width and gap for
+  // this layer (issue 37's maps, from the component rules' impedance solutions) replace the
+  // class-derived width and gap - they are the most specific statement about this layer. The
+  // net-level raises and the required gap still floor both, exactly as they floored the scalar
+  // values above; the offset and via spacings below are computed from the replaced values.
+  if (!layer.empty()) {
+    auto class_w_on = [&](const model::NetClass& k) {
+      if (const auto it = k.diff_pair_width_on.find(layer); it != k.diff_pair_width_on.end()) return it->second;
+      if (!k.has_diff_pair_gap)
+        if (const auto it = k.track_width_on.find(layer); it != k.track_width_on.end()) return it->second;
+      return class_w(k);
+    };
+    r.width = std::max({class_w_on(na), class_w_on(nc), m.track_width, raise});
+    Coord g = 0;
+    bool any = false;
+    for (const model::NetClass* k : {&na, &nc})
+      if (const auto it = k->diff_pair_gap_on.find(layer); it != k->diff_pair_gap_on.end()) {
+        g = std::max(g, it->second);
+        any = true;
+      }
+    if (any) r.gap = std::max(g, req);
+  }
   r.offset = ceil_half(r.width + r.gap) + kRoundMargin;
   // Vias: the class via raised to the board minimums (as the router's own vias), side by side at the via gap.
   r.via_drill = std::max({na.via_drill, nc.via_drill, m.through_hole_diameter});

@@ -4270,8 +4270,23 @@ struct Router::Impl {
     std::vector<std::uint8_t> boxed_before;
     for (const int pi : straddled) boxed_before.push_back(pin_boxed_in(pi) ? 1 : 0);
     const PairRule pr = pair_rule(b, rules, obs->rules(), A.net, B.net, obs->via_mask());
+    // Per-layer pair geometry (issue 38 item 3c): the pair rule evaluated on each copper layer, from
+    // issue 37's per-layer class maps. Where a class carries no per-layer entries the evaluation is
+    // the scalar rule, so prl[l] == pr and every formula below reduces to the pre-3c one. Constants
+    // that must hold on any layer (the fold, the debug line's MV) use the widest layer's values; a via
+    // transition jogs by each layer's own offset, so its two jogs differ when the offsets do; a twist,
+    // a few millimetres long, uses the wider of its two layers' geometry throughout.
+    std::vector<PairRule> prl;
+    for (int l = 0; l < nl; ++l) prl.push_back(pair_rule(b, rules, obs->rules(), A.net, B.net, obs->via_mask(), b.copper_name(l)));
+    auto wl = [&](int l) { return prl[static_cast<std::size_t>(l)].width; };
+    auto offl = [&](int l) { return static_cast<double>(prl[static_cast<std::size_t>(l)].offset); };
     const Coord w = pr.width;
-    const double off = static_cast<double>(pr.offset);
+    double off = 0;
+    Coord w_wide = 0;
+    for (const auto& r : prl) {
+      off = std::max(off, static_cast<double>(r.offset));
+      w_wide = std::max(w_wide, r.width);
+    }
     const Point S{(pa1.pos.x + pb1.pos.x) / 2, (pa1.pos.y + pb1.pos.y) / 2};
     const Point E{(pa2.pos.x + pb2.pos.x) / 2, (pa2.pos.y + pb2.pos.y) / 2};
     const double se = d(S, E);
@@ -4288,19 +4303,24 @@ struct Router::Impl {
     const double Rs = reach(pa1.pos, pb1.pos), Re = reach(pa2.pos, pb2.pos);
     // A turn is followed by a straight run of K lattice steps: the inner track's miter cuts its run back by
     // off * tan(22.5 deg) at each end, so shorter runs would fold the inner track over itself.
-    const double fold = 2.0 * 0.41422 * off + static_cast<double>(w);
+    const double fold = 2.0 * 0.41422 * off + static_cast<double>(w_wide);
     const int K = std::max(1, static_cast<int>(std::ceil(fold / static_cast<double>(pitch))));
-    const double hj = static_cast<double>(pr.via_offset) - off;  // via jog: lateral (and forward) distance
-    const int MV = std::max(1, static_cast<int>(std::ceil((2.0 * hj + fold) / static_cast<double>(pitch))));
+    // The longest via manoeuvre over all layer pairs (the debug line's MV; each move computes its own).
+    int MV = 1;
+    for (int l = 0; l < nl; ++l)
+      for (int l2 = 0; l2 < nl; ++l2) {
+        if (l2 == l) continue;
+        const double voff = static_cast<double>(std::max(prl[static_cast<std::size_t>(l)].via_offset, prl[static_cast<std::size_t>(l2)].via_offset));
+        MV = std::max(MV, static_cast<int>(std::ceil((voff - offl(l) + voff - offl(l2) + fold) / static_cast<double>(pitch))));
+      }
     // Twist (doc 05 §24): the halves change layer one after the other and cross in between, while they are on
     // different layers, so the half that was on the left continues on the right. In the frame of the pair's
     // direction (x along, y to the left), with D = off + via_offset and lead-in and lead-out of D / 2:
     //   right half: (0, -off) -> via at (hj, -vo) -> on the new layer (hj + D/2, -vo) -> (hj + 3D/2, +off) -> on
     //   left half:  (0, +off) -> (hj + D/2, +off) -> (hj + 3D/2, -vo) -> via at (hj + 2D, -vo) -> new layer (2hj + 2D, -off)
     // Each track keeps at least D (the distance the coupled via pair keeps) from the other half's via.
-    const double twD = off + static_cast<double>(pr.via_offset);
-    const double twT = 2.0 * hj + 2.0 * twD;
-    const int MT = std::max(1, static_cast<int>(std::ceil((twT + fold) / static_cast<double>(pitch))));
+    // (The twist's hj / D / T constants are evaluated per transition at the move, from the wider of
+    // the two layers' geometry; with one geometry on every layer they are the values described above.)
     geom::Box box;
     box.add(S);
     box.add(E);
@@ -4387,7 +4407,7 @@ struct Router::Impl {
           if (d(c, S) > Rs) continue;
           for (int dd = 0; dd < 8; ++dd) {
             const Dir2 n = left_normal(dd);
-            const Point L = offset_point(c, n, off), Rt = offset_point(c, n, -off);
+            const Point L = offset_point(c, n, offl(l)), Rt = offset_point(c, n, -offl(l));
             const double c0 = d(pa1.pos, L) + d(pb1.pos, Rt), c1 = d(pa1.pos, Rt) + d(pb1.pos, L);
             Cand cd;
             cd.l = l, cd.gx = gx, cd.gy = gy, cd.dd = dd, cd.s = c0 <= c1 ? 0 : 1;
@@ -4414,7 +4434,7 @@ struct Router::Impl {
       const Point c = at(cd.gx, cd.gy);
       const Dir2 u = unit_dir(cd.dd), n = left_normal(cd.dd);
       const Dir2 a = at_start ? u : Dir2{-u.x, -u.y};
-      const Point XA = offset_point(c, n, cd.s == 0 ? off : -off), XB = offset_point(c, n, cd.s == 0 ? -off : off);
+      const Point XA = offset_point(c, n, cd.s == 0 ? offl(cd.l) : -offl(cd.l)), XB = offset_point(c, n, cd.s == 0 ? -offl(cd.l) : offl(cd.l));
       // The pads lie behind the start of the coupled section and ahead of its end (or level with it): otherwise the
       // legs would double back along the pair.
       for (const auto& [pad_pt, X] : {std::pair{(at_start ? pa1 : pa2).pos, XA}, std::pair{(at_start ? pb1 : pb2).pos, XB}}) {
@@ -4423,8 +4443,8 @@ struct Router::Impl {
       }
       const model::Pad& qa = at_start ? pa1 : pa2;
       const model::Pad& qb = at_start ? pb1 : pb2;
-      const auto la = pair_leg(qa.pos, XA, a, n, cd.l, A.net, w, leg_checks, std::max(qa.size_x, qa.size_y) / 2);
-      const auto lb = la ? pair_leg(qb.pos, XB, a, n, cd.l, B.net, w, leg_checks, std::max(qb.size_x, qb.size_y) / 2) : std::nullopt;
+      const auto la = pair_leg(qa.pos, XA, a, n, cd.l, A.net, wl(cd.l), leg_checks, std::max(qa.size_x, qa.size_y) / 2);
+      const auto lb = la ? pair_leg(qb.pos, XB, a, n, cd.l, B.net, wl(cd.l), leg_checks, std::max(qb.size_x, qb.size_y) / 2) : std::nullopt;
       if (dbg_legs > 0 && !at_start && (!la || !lb || !legs_clear(*la, *lb, pr.required_gap))) {
         --dbg_legs;
         const Point pA = (at_start ? pa1 : pa2).pos, pB = (at_start ? pb1 : pb2).pos;
@@ -4435,8 +4455,8 @@ struct Router::Impl {
       if (!la || !lb || !legs_clear(*la, *lb, pr.required_gap)) return false;
       // Each leg against the other half's straight run next to the candidate (K steps are straight at both ends).
       const double run = static_cast<double>(K * pitch) * (at_start ? 1.0 : -1.0);
-      if (!legs_clear(*la, PairLeg{{XB, offset_point(XB, u, run)}, w, 0}, pr.required_gap) ||
-          !legs_clear(*lb, PairLeg{{XA, offset_point(XA, u, run)}, w, 0}, pr.required_gap))
+      if (!legs_clear(*la, PairLeg{{XB, offset_point(XB, u, run)}, wl(cd.l), 0}, pr.required_gap) ||
+          !legs_clear(*lb, PairLeg{{XA, offset_point(XA, u, run)}, wl(cd.l), 0}, pr.required_gap))
         return false;
       cd.la = *la;
       cd.lb = *lb;
@@ -4452,7 +4472,7 @@ struct Router::Impl {
       const Dir2 n = left_normal(dd);
       std::int64_t pen = 0;
       for (const double sg : {1.0, -1.0}) {
-        const Point t = offset_point(c, n, sg * off);
+        const Point t = offset_point(c, n, sg * offl(l));
         const int vx = to_ix(t.x), vy = to_iy(t.y);
         if (vx >= 0 && vy >= 0 && vx < nx && vy < ny && refmap.over_void[lat_index(l, vx, vy)]) pen += split_pen;
       }
@@ -4468,7 +4488,7 @@ struct Router::Impl {
       }
       pq.push({g + hcost(c, l), seq++, 0, k});
     };
-    auto seg_ok = [&](Point p, Point q, int l, NetId net) { return p == q || (layer_ok(net, l) && obs->segment_state(p, q, l, w, net, false, nullptr) == 0); };
+    auto seg_ok = [&](Point p, Point q, int l, NetId net) { return p == q || (layer_ok(net, l) && obs->segment_state(p, q, l, wl(l), net, false, nullptr) == 0); };
     // The negotiated attempt's legality: a segment is soft-legal when everything it crosses is
     // routed copper of a connection the pair may displace (victim_eligible); fixed copper, holes,
     // edges and keepouts still block outright (state 2). soft_hits counts the soft segments of the
@@ -4480,7 +4500,7 @@ struct Router::Impl {
       if (p == q) return true;
       if (!layer_ok(net, l)) return false;
       soft_owners.clear();
-      const int code = obs->segment_state(p, q, l, w, net, true, &soft_owners);
+      const int code = obs->segment_state(p, q, l, wl(l), net, true, &soft_owners);
       if (code == 2) return false;
       if (code == 1) {
         for (const int v : soft_owners)
@@ -4533,15 +4553,16 @@ struct Router::Impl {
           const std::uint8_t mv = nodes.at(chain[i]).move;
           // Corners only: a node's own offset point is emitted where the track leaves the straight line (a via) and
           // at the end; emitting it before an inner miter would fold the track back over itself.
-          if (mv == kTurn) to(miter_point(cp, p.dd, q.dd, sg * off), w);
+          if (mv == kTurn) to(miter_point(cp, p.dd, q.dd, sg * offl(p.l)), wl(p.l));
           if (mv == kVia) {
             const Dir2 u = unit_dir(p.dd), n = left_normal(p.dd);
             const bool micro = nodes.at(chain[i]).vkind == 2;
-            const Coord voff = micro ? pr.micro_via_offset : pr.via_offset;
-            const double hjj = static_cast<double>(voff) - off;
-            const Point V = offset_point(offset_point(cp, u, hjj), n, sg * static_cast<double>(voff));
-            to(offset_point(cp, n, sg * off), w);
-            to(V, w);
+            const Coord voff = micro ? std::max(prl[static_cast<std::size_t>(p.l)].micro_via_offset, prl[static_cast<std::size_t>(q.l)].micro_via_offset)
+                                     : std::max(prl[static_cast<std::size_t>(p.l)].via_offset, prl[static_cast<std::size_t>(q.l)].via_offset);
+            const double hj0 = static_cast<double>(voff) - offl(p.l), hj1 = static_cast<double>(voff) - offl(q.l);
+            const Point V = offset_point(offset_point(cp, u, hj0), n, sg * static_cast<double>(voff));
+            to(offset_point(cp, n, sg * offl(p.l)), wl(p.l));
+            to(V, wl(p.l));
             PairVia pv = span_via(V, p, q);
             if (micro) {
               pv.type = model::ViaType::Micro;
@@ -4550,34 +4571,36 @@ struct Router::Impl {
             }
             h.vias.push_back(pv);
             layer = q.l;
-            to(offset_point(offset_point(cp, u, 2 * hjj), n, sg * off), w);
+            to(offset_point(offset_point(cp, u, hj0 + hj1), n, sg * offl(q.l)), wl(q.l));
           }
           if (mv == kTwist) {
             const Dir2 u = unit_dir(p.dd), n = left_normal(p.dd);
             auto pt = [&](double x, double y) { return offset_point(offset_point(cp, u, x), n, y); };
-            const double vo = static_cast<double>(pr.via_offset);
+            const double offT = std::max(offl(p.l), offl(q.l));
+            const double vo = static_cast<double>(std::max(prl[static_cast<std::size_t>(p.l)].via_offset, prl[static_cast<std::size_t>(q.l)].via_offset));
+            const double hj = vo - offT, twD = offT + vo, twT = 2.0 * hj + 2.0 * twD;
             if (sg > 0) {  // the left half: crosses on the old layer, changes layer last
-              to(pt(0, off), w);
-              to(pt(hj + twD / 2, off), w);
-              to(pt(hj + 1.5 * twD, -vo), w);
+              to(pt(0, offT), wl(p.l));
+              to(pt(hj + twD / 2, offT), wl(p.l));
+              to(pt(hj + 1.5 * twD, -vo), wl(p.l));
               const Point V = pt(hj + 2.0 * twD, -vo);
-              to(V, w);
+              to(V, wl(p.l));
               h.vias.push_back(span_via(V, p, q));
               layer = q.l;
-              to(pt(twT, -off), w);
+              to(pt(twT, -offT), wl(q.l));
             } else {  // the right half: changes layer first, crosses on the new layer
-              to(pt(0, -off), w);
+              to(pt(0, -offT), wl(p.l));
               const Point V = pt(hj, -vo);
-              to(V, w);
+              to(V, wl(p.l));
               h.vias.push_back(span_via(V, p, q));
               layer = q.l;
-              to(pt(hj + twD / 2, -vo), w);
-              to(pt(hj + 1.5 * twD, off), w);
-              to(pt(twT, off), w);
+              to(pt(hj + twD / 2, -vo), wl(q.l));
+              to(pt(hj + 1.5 * twD, offT), wl(q.l));
+              to(pt(twT, offT), wl(q.l));
             }
             sg = -sg;
           }
-          if (i + 1 == chain.size()) to(offset_point(cq, left_normal(q.dd), sg * off), w);
+          if (i + 1 == chain.size()) to(offset_point(cq, left_normal(q.dd), sg * offl(q.l)), wl(q.l));
         }
         for (std::size_t i = le.pts.size(); i-- > 1;) to(le.pts[i - 1], le.w);
         // Merge collinear runs of one layer and width.
@@ -4791,7 +4814,7 @@ struct Router::Impl {
       const Dir2 u = unit_dir(x.dd), n = left_normal(x.dd);
       // Goal candidate: near the end pads, on a layer both have, after at least one coupled move.
       if (mv0 != kStart && (e_layers & model::layer_bit(x.l)) && d(c, E) <= Re) {
-        const Point L = offset_point(c, n, off), Rt = offset_point(c, n, -off);
+        const Point L = offset_point(c, n, offl(x.l)), Rt = offset_point(c, n, -offl(x.l));
         const Point la = x.s == 0 ? L : Rt, lb = x.s == 0 ? Rt : L;
         Cand cd;
         cd.l = x.l, cd.gx = x.gx, cd.gy = x.gy, cd.dd = x.dd, cd.s = x.s, cd.node = q.id;
@@ -4811,8 +4834,8 @@ struct Router::Impl {
             auto& memo = straight_ok[nk];
             if (memo == 0) {
               const Point c2 = at(gx, gy);
-              memo = seg_ok(offset_point(c, n, off), offset_point(c2, n, off), x.l, net_of(1, x.s)) &&
-                             seg_ok(offset_point(c, n, -off), offset_point(c2, n, -off), x.l, net_of(-1, x.s))
+              memo = seg_ok(offset_point(c, n, offl(x.l)), offset_point(c2, n, offl(x.l)), x.l, net_of(1, x.s)) &&
+                             seg_ok(offset_point(c, n, -offl(x.l)), offset_point(c2, n, -offl(x.l)), x.l, net_of(-1, x.s))
                          ? 1
                          : 2;
             }
@@ -4820,8 +4843,8 @@ struct Router::Impl {
           } else {
             const Point c2 = at(gx, gy);
             soft_hits = 0;
-            good = seg_soft(offset_point(c, n, off), offset_point(c2, n, off), x.l, net_of(1, x.s)) &&
-                   seg_soft(offset_point(c, n, -off), offset_point(c2, n, -off), x.l, net_of(-1, x.s));
+            good = seg_soft(offset_point(c, n, offl(x.l)), offset_point(c2, n, offl(x.l)), x.l, net_of(1, x.s)) &&
+                   seg_soft(offset_point(c, n, -offl(x.l)), offset_point(c2, n, -offl(x.l)), x.l, net_of(-1, x.s));
           }
           if (good) relax(nk, g + k * steplen(x.dd, x.l) + soft_hits * soft_pen, q.id, -1, kStraight, at(gx, gy), x.l, x.dd);
         }
@@ -4840,8 +4863,8 @@ struct Router::Impl {
           for (const double sg : {1.0, -1.0}) {
             if (!good) break;
             const NetId net = net_of(sg, x.s);
-            const Point M = miter_point(c, x.dd, d2, sg * off);
-            good = seg_soft(offset_point(c, n, sg * off), M, x.l, net) && seg_soft(M, offset_point(c2, n2, sg * off), x.l, net);
+            const Point M = miter_point(c, x.dd, d2, sg * offl(x.l));
+            good = seg_soft(offset_point(c, n, sg * offl(x.l)), M, x.l, net) && seg_soft(M, offset_point(c2, n2, sg * offl(x.l)), x.l, net);
           }
           if (good) relax(key(x.l, gx, gy, d2, x.s), g + K * steplen(d2, x.l) + bend_cost + soft_hits * soft_pen, q.id, -1, kTurn, c2, x.l, d2);
         }
@@ -4854,8 +4877,9 @@ struct Router::Impl {
           if (l2 == x.l) continue;
           const int lo = std::min(x.l, l2), hi = std::max(x.l, l2);
           auto attempt = [&](Coord voff, Coord vd2, Coord vdr2, model::ViaType vt, std::uint8_t vkind) {
-            const double hj2 = static_cast<double>(voff) - off;
-            const int mv2 = std::max(1, static_cast<int>(std::ceil((2.0 * hj2 + fold) / static_cast<double>(pitch))));
+            const double off0 = offl(x.l), off1 = offl(l2);
+            const double hj0 = static_cast<double>(voff) - off0, hj1 = static_cast<double>(voff) - off1;
+            const int mv2 = std::max(1, static_cast<int>(std::ceil((hj0 + hj1 + fold) / static_cast<double>(pitch))));
             int gx = x.gx, gy = x.gy;
             delta(x.dd, mv2, gx, gy);
             if (!in_win(gx, gy) || !obs->inside_board(at(gx, gy), 0)) return;
@@ -4863,9 +4887,9 @@ struct Router::Impl {
             soft_hits = 0;
             for (const double sg : {1.0, -1.0}) {
               const NetId net = net_of(sg, x.s);
-              const Point P = offset_point(c, n, sg * off);
-              const Point V = offset_point(offset_point(c, u, hj2), n, sg * static_cast<double>(voff));
-              const Point Q = offset_point(offset_point(c, u, 2 * hj2), n, sg * off);
+              const Point P = offset_point(c, n, sg * off0);
+              const Point V = offset_point(offset_point(c, u, hj0), n, sg * static_cast<double>(voff));
+              const Point Q = offset_point(offset_point(c, u, hj0 + hj1), n, sg * off1);
               soft_owners.clear();
               const int vs = vt == model::ViaType::Through ? obs->via_state(V, vd2, vdr2, net, 0, negotiate, &soft_owners)
                                                            : obs->via_state_span(V, vd2, vdr2, net, 0, negotiate, &soft_owners, lo, hi, vt);
@@ -4878,27 +4902,33 @@ struct Router::Impl {
                   }
                 if (vok) ++soft_hits;
               }
-              if (!(seg_soft(P, V, x.l, net) && vok && seg_soft(V, Q, l2, net) && seg_soft(Q, offset_point(c2, n, sg * off), l2, net))) return;
+              if (!(seg_soft(P, V, x.l, net) && vok && seg_soft(V, Q, l2, net) && seg_soft(Q, offset_point(c2, n, sg * off1), l2, net))) return;
             }
             relax(key(l2, gx, gy, x.dd, x.s), g + mv2 * steplen(x.dd, l2) + via_pair_cost + soft_hits * soft_pen, q.id, -1, kVia, c2, l2, x.dd, vkind);
           };
           if (pr.micro_diameter > 0 && micro_for(A.net) && micro_for(B.net) && micro_span(x.l, l2))
-            attempt(pr.micro_via_offset, pr.micro_diameter, pr.micro_drill, model::ViaType::Micro, 2);
-          attempt(pr.via_offset, pr.via_diameter, pr.via_drill,
-                  blind_for(A.net) && blind_for(B.net) ? model::ViaType::Blind : model::ViaType::Through, 0);
+            attempt(std::max(prl[static_cast<std::size_t>(x.l)].micro_via_offset, prl[static_cast<std::size_t>(l2)].micro_via_offset),
+                    pr.micro_diameter, pr.micro_drill, model::ViaType::Micro, 2);
+          attempt(std::max(prl[static_cast<std::size_t>(x.l)].via_offset, prl[static_cast<std::size_t>(l2)].via_offset), pr.via_diameter,
+                  pr.via_drill, blind_for(A.net) && blind_for(B.net) ? model::ViaType::Blind : model::ViaType::Through, 0);
         }
       }
-      // Twist: change layer and swap sides (the geometry is described where MT is defined).
+      // Twist: change layer and swap sides (the geometry is described where the pair constants are
+      // introduced). Its constants come from the wider of the two layers' geometry (item 3c), so the
+      // advance is per target layer, computed inside the loop.
       if (vias_ok && opt.pair_twists && mv0 != kStart) {
-        int gx = x.gx, gy = x.gy;
-        delta(x.dd, MT, gx, gy);
-        if (in_win(gx, gy) && obs->inside_board(at(gx, gy), 0)) {
-          const Point c2 = at(gx, gy);
-          auto pt = [&](double xx, double yy) { return offset_point(offset_point(c, u, xx), n, yy); };
-          const double vo = static_cast<double>(pr.via_offset);
-          const NetId nl_ = net_of(1, x.s), nr_ = net_of(-1, x.s);
-          for (int l2 = 0; l2 < nl; ++l2) {
-            if (l2 == x.l) continue;
+        auto pt = [&](double xx, double yy) { return offset_point(offset_point(c, u, xx), n, yy); };
+        const NetId nl_ = net_of(1, x.s), nr_ = net_of(-1, x.s);
+        for (int l2 = 0; l2 < nl; ++l2) {
+          if (l2 == x.l) continue;
+          const double offT = std::max(offl(x.l), offl(l2));
+          const double vo = static_cast<double>(std::max(prl[static_cast<std::size_t>(x.l)].via_offset, prl[static_cast<std::size_t>(l2)].via_offset));
+          const double hj = vo - offT, twD = offT + vo, twT = 2.0 * hj + 2.0 * twD;
+          const int mvT = std::max(1, static_cast<int>(std::ceil((twT + fold) / static_cast<double>(pitch))));
+          int gx = x.gx, gy = x.gy;
+          delta(x.dd, mvT, gx, gy);
+          if (in_win(gx, gy) && obs->inside_board(at(gx, gy), 0)) {
+            const Point c2 = at(gx, gy);
             const Point VR = pt(hj, -vo), VL = pt(hj + 2.0 * twD, -vo);
             const int tlo = std::min(x.l, l2), thi = std::max(x.l, l2);
             const bool tblind = blind_for(A.net) && blind_for(B.net);
@@ -4922,16 +4952,16 @@ struct Router::Impl {
             soft_hits = 0;
             const bool good =
                 // right half
-                seg_soft(pt(0, -off), VR, x.l, nr_) && vstate_soft(VR, nr_) &&
-                seg_soft(VR, pt(hj + twD / 2, -vo), l2, nr_) && seg_soft(pt(hj + twD / 2, -vo), pt(hj + 1.5 * twD, off), l2, nr_) &&
-                seg_soft(pt(hj + 1.5 * twD, off), pt(twT, off), l2, nr_) && seg_soft(pt(twT, off), offset_point(c2, n, off), l2, nr_) &&
+                seg_soft(pt(0, -offT), VR, x.l, nr_) && vstate_soft(VR, nr_) &&
+                seg_soft(VR, pt(hj + twD / 2, -vo), l2, nr_) && seg_soft(pt(hj + twD / 2, -vo), pt(hj + 1.5 * twD, offT), l2, nr_) &&
+                seg_soft(pt(hj + 1.5 * twD, offT), pt(twT, offT), l2, nr_) && seg_soft(pt(twT, offT), offset_point(c2, n, offT), l2, nr_) &&
                 // left half
-                seg_soft(pt(0, off), pt(hj + twD / 2, off), x.l, nl_) && seg_soft(pt(hj + twD / 2, off), pt(hj + 1.5 * twD, -vo), x.l, nl_) &&
+                seg_soft(pt(0, offT), pt(hj + twD / 2, offT), x.l, nl_) && seg_soft(pt(hj + twD / 2, offT), pt(hj + 1.5 * twD, -vo), x.l, nl_) &&
                 seg_soft(pt(hj + 1.5 * twD, -vo), VL, x.l, nl_) && vstate_soft(VL, nl_) &&
-                seg_soft(VL, pt(twT, -off), l2, nl_) && seg_soft(pt(twT, -off), offset_point(c2, n, -off), l2, nl_);
+                seg_soft(VL, pt(twT, -offT), l2, nl_) && seg_soft(pt(twT, -offT), offset_point(c2, n, -offT), l2, nl_);
             // Dearer than a plain via pair by its uncoupled length: used only where the pin order calls for it.
             if (good)
-              relax(key(l2, gx, gy, x.dd, 1 - x.s), g + MT * steplen(x.dd, l2) + via_pair_cost + leg_weight * static_cast<std::int64_t>(2.0 * twD) + soft_hits * soft_pen, q.id, -1, kTwist, c2, l2, x.dd);
+              relax(key(l2, gx, gy, x.dd, 1 - x.s), g + mvT * steplen(x.dd, l2) + via_pair_cost + leg_weight * static_cast<std::int64_t>(2.0 * twD) + soft_hits * soft_pen, q.id, -1, kTwist, c2, l2, x.dd);
           }
         }
       }
