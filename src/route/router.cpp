@@ -4366,7 +4366,24 @@ struct Router::Impl {
       cd.lb = *lb;
       return true;
     };
-    auto relax = [&](std::uint64_t k, std::int64_t g, std::uint64_t parent, std::int32_t start, std::uint8_t move, Point c, int l) {
+    // Issue 38 item 1: a critical pair is charged for running over a void of its reference plane, as a single-ended
+    // critical net is (issue 24). The pair's states sit on the centreline while the tracks run at +/- off, so the map
+    // is queried at both track positions; the term is priced into relax(), never into the straight_ok legality memo.
+    // Cost only - no legality change, even under --split-hard.
+    const bool pair_split = split_on && (crit_split[static_cast<std::size_t>(A.net)] || crit_split[static_cast<std::size_t>(B.net)]);
+    auto void_cost = [&](Point c, int dd, int l) -> std::int64_t {
+      if (!pair_split) return 0;
+      const Dir2 n = left_normal(dd);
+      std::int64_t pen = 0;
+      for (const double sg : {1.0, -1.0}) {
+        const Point t = offset_point(c, n, sg * off);
+        const int vx = to_ix(t.x), vy = to_iy(t.y);
+        if (vx >= 0 && vy >= 0 && vx < nx && vy < ny && refmap.over_void[lat_index(l, vx, vy)]) pen += split_pen;
+      }
+      return pen;
+    };
+    auto relax = [&](std::uint64_t k, std::int64_t g, std::uint64_t parent, std::int32_t start, std::uint8_t move, Point c, int l, int dd) {
+      g += void_cost(c, dd, l);
       auto [it, fresh] = nodes.try_emplace(k, PN{g, parent, start, move, false});
       if (!fresh) {
         if (it->second.closed || it->second.g <= g) return;
@@ -4512,6 +4529,9 @@ struct Router::Impl {
           commit_half(ia, ha, pr.via_diameter, pr.via_drill);
           if (half_legal(hb, pr.via_diameter, pr.via_drill)) {  // now against the first half too
             commit_half(ib, hb, pr.via_diameter, pr.via_drill);
+            if (pair_split)  // the void audit, extended to pair paths (issue 38 item 1)
+              for (const PairHalf* h : {&ha, &hb})
+                for (const auto& [layer, sg2] : h->segs) res.pair_void_samples += static_cast<long>(void_samples(layer, sg2.a, sg2.b));
             done = true;
             break;
           }
@@ -4538,7 +4558,7 @@ struct Router::Impl {
             continue;
           }
         }
-        relax(key(cd.l, cd.gx, cd.gy, cd.dd, cd.s), cd.g, 0, static_cast<std::int32_t>(q.id), kStart, c, cd.l);
+        relax(key(cd.l, cd.gx, cd.gy, cd.dd, cd.s), cd.g, 0, static_cast<std::int32_t>(q.id), kStart, c, cd.l, cd.dd);
         continue;
       }
       auto it = nodes.find(q.id);
@@ -4586,7 +4606,7 @@ struct Router::Impl {
             good = seg_ok(offset_point(c, n, off), offset_point(c2, n, off), x.l, net_of(1, x.s)) &&
                    seg_ok(offset_point(c, n, -off), offset_point(c2, n, -off), x.l, net_of(-1, x.s));
           }
-          if (good) relax(nk, g + k * steplen(x.dd, x.l), q.id, -1, kStraight, at(gx, gy), x.l);
+          if (good) relax(nk, g + k * steplen(x.dd, x.l), q.id, -1, kStraight, at(gx, gy), x.l, x.dd);
         }
       }
       // 45-degree turns, each followed by K straight steps.
@@ -4605,7 +4625,7 @@ struct Router::Impl {
             const Point M = miter_point(c, x.dd, d2, sg * off);
             good = seg_ok(offset_point(c, n, sg * off), M, x.l, net) && seg_ok(M, offset_point(c2, n2, sg * off), x.l, net);
           }
-          if (good) relax(key(x.l, gx, gy, d2, x.s), g + K * steplen(d2, x.l) + bend_cost, q.id, -1, kTurn, c2, x.l);
+          if (good) relax(key(x.l, gx, gy, d2, x.s), g + K * steplen(d2, x.l) + bend_cost, q.id, -1, kTurn, c2, x.l, d2);
         }
       // Coupled via pair: jog out to the via spacing, change layer, jog back, MV steps in all.
       if (vias_ok) {
@@ -4625,7 +4645,7 @@ struct Router::Impl {
               good = seg_ok(P, V, x.l, net) && obs->via_state(V, pr.via_diameter, pr.via_drill, net, 0, false, nullptr) == 0 && seg_ok(V, Q, l2, net) &&
                      seg_ok(Q, offset_point(c2, n, sg * off), l2, net);
             }
-            if (good) relax(key(l2, gx, gy, x.dd, x.s), g + MV * steplen(x.dd, l2) + via_pair_cost, q.id, -1, kVia, c2, l2);
+            if (good) relax(key(l2, gx, gy, x.dd, x.s), g + MV * steplen(x.dd, l2) + via_pair_cost, q.id, -1, kVia, c2, l2, x.dd);
           }
         }
       }
@@ -4652,7 +4672,7 @@ struct Router::Impl {
                 seg_ok(VL, pt(twT, -off), l2, nl_) && seg_ok(pt(twT, -off), offset_point(c2, n, -off), l2, nl_);
             // Dearer than a plain via pair by its uncoupled length: used only where the pin order calls for it.
             if (good)
-              relax(key(l2, gx, gy, x.dd, 1 - x.s), g + MT * steplen(x.dd, l2) + via_pair_cost + leg_weight * static_cast<std::int64_t>(2.0 * twD), q.id, -1, kTwist, c2, l2);
+              relax(key(l2, gx, gy, x.dd, 1 - x.s), g + MT * steplen(x.dd, l2) + via_pair_cost + leg_weight * static_cast<std::int64_t>(2.0 * twD), q.id, -1, kTwist, c2, l2, x.dd);
           }
         }
       }

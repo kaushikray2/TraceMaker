@@ -2404,6 +2404,7 @@ RouteJobResult run_route_job(RouteJob job) {
         (res.pairs_over_share > 0 ? fmt(", %d attempts left to single routing (--pair-share)", res.pairs_over_share) : std::string()));
     if (res.pair_retried > 0) log(fmt("  %d of them coupled by the wider retry (--pair-retry-leg-mm)", res.pair_retried));
     out.summary["pair_work"] = res.pair_work;
+    out.summary["pair_void_samples"] = res.pair_void_samples;
     for (const auto& [na, nb] : want) {
       const auto pr = route::pair_rule(lb.board, rules, re, na, nb);
       const auto st = route::measure_pair(res.tracks, res.vias, na, nb, route::coupled_threshold(pr));

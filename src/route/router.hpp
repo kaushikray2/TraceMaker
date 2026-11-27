@@ -407,6 +407,7 @@ struct RouteResult {
   int connections = 0, routed = 0;
   long expansions = 0;
   long pair_work = 0;           // the part of `expansions` spent in coupled pair searches (closed states and leg checks)
+  long pair_void_samples = 0;   // issue 38 item 1: lattice samples of routed critical pairs' tracks over a reference-plane void (the void audit)
   int rips = 0, passes = 0;
   int enclosed = 0;             // searches that proved the source boxed in (no larger window tried)
   long nogood_skips = 0;        // attempts skipped because an identical attempt already failed
