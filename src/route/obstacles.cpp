@@ -322,6 +322,15 @@ Obstacles::Obstacles(model::Board& board, const model::DesignRules& rules) : b_(
   for (const auto& z : b_.zones)
     if (z.rule_area && (z.keepout_tracks || z.keepout_vias) && !z.outline.empty() && z.outline.front().size() >= 3)
       keepouts_.emplace_back(Shape::polygon(z.outline.front(), 0), &z);
+  // Stage 2B: index keepouts and mask openings by bounding box. The legality probes scanned
+  // both lists linearly per cell; queries inflate by the test distance (+1 slack, the other
+  // grids convention), so the candidate set is a superset and the exact tests decide as before.
+  kgrid_ = std::make_unique<index::UniformGrid>(bounds_, cell, keepouts_.size() + 16);
+  for (std::size_t i = 0; i < keepouts_.size(); ++i) kgrid_->insert(static_cast<int>(i), keepouts_[i].first.box);
+  for (int side = 0; side < 2; ++side) {
+    mgrid_[side] = std::make_unique<index::UniformGrid>(bounds_, cell, mask_open_[side].size() + 16);
+    for (std::size_t i = 0; i < mask_open_[side].size(); ++i) mgrid_[side]->insert(static_cast<int>(i), mask_open_[side][i].box);
+  }
   setup_coupling();
 }
 
@@ -569,13 +578,24 @@ int Obstacles::holes_edges_state(const Shape& s, model::NetId net, int layer, bo
     if (n == 0 || n != net) ap_blocked = true;
   });
   if (ap_blocked) return 2;
-  // Keepouts and solder-mask openings.
-  for (const auto& [area, z] : keepouts_)
-    if ((z->copper & model::layer_bit(layer)) && (is_via_hole ? z->keepout_vias : z->keepout_tracks) && geom::closer_than(s, area, 1)) return 2;
+  // Keepouts and solder-mask openings (bounding-box indexed; the exact tests decide).
+  bool ko_blocked = false;
+  kgrid_->query(s.box.inflated(2), [&](int id) {
+    if (ko_blocked) return;
+    const auto& [area, z] = keepouts_[static_cast<std::size_t>(id)];
+    if ((z->copper & model::layer_bit(layer)) && (is_via_hole ? z->keepout_vias : z->keepout_tracks) && geom::closer_than(s, area, 1)) ko_blocked = true;
+  });
+  if (ko_blocked) return 2;
   const int side = layer == 0 ? 0 : layer == b_.copper_count() - 1 ? 1 : -1;
-  if (side >= 0 && !soft_mask_graphics_)
-    for (const auto& m : mask_open_[side])
-      if (m.box.inflated(100'000).intersects(s.box) && geom::closer_than(s, m, 100'000)) return 2;
+  if (side >= 0 && !soft_mask_graphics_) {
+    bool mask_blocked = false;
+    mgrid_[side]->query(s.box.inflated(100'001), [&](int id) {
+      if (mask_blocked) return;
+      const auto& m = mask_open_[side][static_cast<std::size_t>(id)];
+      if (m.box.inflated(100'000).intersects(s.box) && geom::closer_than(s, m, 100'000)) mask_blocked = true;
+    });
+    if (mask_blocked) return 2;
+  }
   return state;
 }
 
@@ -999,12 +1019,23 @@ std::int32_t Obstacles::fixed_code(Point p, int layer, Coord hw, Coord margin, m
     if (edge_ok && geom::closer_than(s, edge_segs_[static_cast<std::size_t>(id)], ec)) edge_ok = false;
   });
   if (!edge_ok) return kBlocked;
-  for (const auto& [area, z] : keepouts_)
-    if ((z->copper & model::layer_bit(layer)) && (via_probe ? z->keepout_vias : z->keepout_tracks) && geom::closer_than(s, area, 1)) return kBlocked;
+  bool ko_blocked = false;
+  kgrid_->query(s.box.inflated(2), [&](int id) {
+    if (ko_blocked) return;
+    const auto& [area, z] = keepouts_[static_cast<std::size_t>(id)];
+    if ((z->copper & model::layer_bit(layer)) && (via_probe ? z->keepout_vias : z->keepout_tracks) && geom::closer_than(s, area, 1)) ko_blocked = true;
+  });
+  if (ko_blocked) return kBlocked;
   const int side = layer == 0 ? 0 : layer == b_.copper_count() - 1 ? 1 : -1;
-  if (side >= 0 && !soft_mask_graphics_)
-    for (const auto& m : mask_open_[side])
-      if (m.box.inflated(100'000).intersects(s.box) && geom::closer_than(s, m, 100'000)) return kBlocked;  // 0.1 mm: KiCad flags near misses
+  if (side >= 0 && !soft_mask_graphics_) {
+    bool mask_blocked = false;
+    mgrid_[side]->query(s.box.inflated(100'001), [&](int id) {
+      if (mask_blocked) return;
+      const auto& m = mask_open_[side][static_cast<std::size_t>(id)];
+      if (m.box.inflated(100'000).intersects(s.box) && geom::closer_than(s, m, 100'000)) mask_blocked = true;  // 0.1 mm: KiCad flags near misses
+    });
+    if (mask_blocked) return kBlocked;
+  }
   return code;
 }
 
@@ -1082,11 +1113,21 @@ std::int32_t Obstacles::fixed_via_code(Point p, Coord d, Coord drill, Coord marg
   });
   if (!edge_ok) return kBlocked;
   const model::LayerMask copper = nl >= 64 ? ~model::LayerMask{0} : (model::LayerMask{1} << nl) - 1;
-  for (const auto& [area, z] : keepouts_)
-    if (z->keepout_vias && (z->copper & copper) && geom::closer_than(s, area, 1)) return kBlocked;
-  for (int side = 0; side < (nl > 1 ? 2 : 1) && !soft_mask_graphics_; ++side)
-    for (const auto& m : mask_open_[side])
-      if (m.box.inflated(100'000).intersects(s.box) && geom::closer_than(s, m, 100'000)) return kBlocked;  // 0.1 mm: KiCad flags near misses
+  bool ko_blocked = false;
+  kgrid_->query(s.box.inflated(2), [&](int id) {
+    if (ko_blocked) return;
+    const auto& [area, z] = keepouts_[static_cast<std::size_t>(id)];
+    if (z->keepout_vias && (z->copper & copper) && geom::closer_than(s, area, 1)) ko_blocked = true;
+  });
+  if (ko_blocked) return kBlocked;
+  bool mask_blocked = false;
+  for (int side = 0; side < (nl > 1 ? 2 : 1) && !soft_mask_graphics_ && !mask_blocked; ++side)
+    mgrid_[side]->query(s.box.inflated(100'001), [&](int id) {
+      if (mask_blocked) return;
+      const auto& m = mask_open_[side][static_cast<std::size_t>(id)];
+      if (m.box.inflated(100'000).intersects(s.box) && geom::closer_than(s, m, 100'000)) mask_blocked = true;  // 0.1 mm: KiCad flags near misses
+    });
+  if (mask_blocked) return kBlocked;
   return via_hole_code(p, drill, margin, probe_net, code);
 }
 

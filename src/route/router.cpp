@@ -32,6 +32,8 @@
 
 #include "core/live.hpp"
 #include "core/rng.hpp"
+#include "core/parallel.hpp"
+#include "core/flat_map.hpp"
 #include "drc/connectivity.hpp"
 #include "gpu/device.hpp"
 #include "gpu/field.hpp"
@@ -130,51 +132,82 @@ struct Router::Impl {
   };
   static constexpr std::uint32_t kGenMask = 0x0FFFFFFFu;
   // The state records of a search, behind one face in two stores. Dense (the default): one vector sized to the largest
-  // window seen, exactly as it has always been. Paged (--paged-nodes): blocks of 2^16 records (1 MB), allocated on first
-  // touch and stamped with the search generation that cleared them, so a search pays only for the states it touches and
+  // window seen, exactly as it has always been. Paged (--paged-nodes): the board lattice is cut into 16x16-cell tiles
+  // and one block holds every state of a tile (all layers, all direction states of its 256 cells), allocated on first
+  // touch and stamped with the search generation that cleared it, so a search pays only for the tiles it touches and
   // a new search clears nothing up front: a block whose stamp is not the current generation is cleared when next
-  // touched, and an untouched state reads as the never-written record {0, 0, -1}, whose tag matches no live generation.
-  // The --search-mem budget binds the paged store at touch time, per search: it counts the blocks a search newly
-  // allocates, measured from the snapshot of `used` taken when the search began, not the blocks the store retains
-  // from earlier searches (the option is one search's state records at most). A block allocated past the budget
-  // still serves the expansion that asked for it (the overshoot is bounded by one expansion's new blocks) and flags
-  // the overflow, and the search then stops as Miss::Budget -- the refusal D199 ends at, reached only when the
-  // memory is really touched. Retained blocks are never freed between searches; they are bounded by the largest
-  // window's directory, the same bound as the dense vector.
+  // touched, and an untouched state reads as the never-written record {0, 0, -1}, whose tag matches no live
+  // generation. Tiles are board-global (not window-local), so blocks survive from one search to the next as long as
+  // the board and the direction-state count stand; a via step stays inside the tile's block, where the flat 2^16
+  // striping this replaces charged a fresh 1 MB block per strip a compact search crossed. The --search-mem budget
+  // binds the paged store at touch time, per search: it counts the blocks a search touches (stamps for its
+  // generation), so whether a block was retained by an earlier search over the same ground cannot decide whether
+  // this search is over budget (hardening #15). A block allocated past the budget still serves the expansion that
+  // asked for it (the overshoot is bounded by one expansion's new blocks) and flags the overflow, and the search
+  // then stops as Miss::Budget -- the refusal D199 ends at, reached only when the memory is really touched.
+  // Retained blocks are released when what is retained passes the budget (hardening #15), and when the tile
+  // geometry changes (another board, or the other direction-state count), which makes every retained record
+  // meaningless anyway.
   struct NodeStore {
-    static constexpr std::size_t kBlockShift = 16;
-    static constexpr std::size_t kBlock = std::size_t{1} << kBlockShift;  // states per block
+    static constexpr int kTileShift = 4;                            // 16 cells per tile side
+    static constexpr std::size_t kTileCells = std::size_t{1} << (2 * kTileShift);  // 256 cells per tile
     struct Block {
       std::uint32_t epoch = 0;  // the search generation the records were cleared for (0 = none)
-      std::array<SNode, kBlock> v;
+      std::unique_ptr<SNode[]> v;  // cap records: ((cell in tile) * layers + layer) * dirs + dir
     };
     bool paged = false;
     std::vector<SNode> dense;
-    std::vector<std::unique_ptr<Block>> blocks;  // the block directory (paged only)
+    std::vector<std::unique_ptr<Block>> blocks;  // the tile directory, tiles_y * tiles_x entries (paged only)
     std::uint32_t epoch = 0;                     // the current search generation (paged only)
     std::size_t budget = 0;                      // bytes of blocks one search may touch (0 = no limit)
-    std::size_t used = 0;                        // bytes the blocks take now
-    std::size_t touched = 0;                    // bytes of blocks this search has stamped for its generation (the budget counts these)
+    std::size_t used = 0;                        // bytes the blocks in the directory take now
+    std::size_t touched = 0;                     // bytes of blocks this search has stamped for its generation (the budget counts these)
     bool overflowed = false;                     // this search touched more blocks than the budget holds
+    // Tile geometry and the current search's window (paged only), set by prepare().
+    int tiles_x = 0, tiles_y = 0;
+    std::size_t cap = 0;        // records per block: kTileCells * layers * dirs
+    std::size_t per_cell = 0;   // records per cell inside a block: layers * dirs (cap / kTileCells), precomputed for locate()
+    std::size_t dirs = 1;       // direction states per layer-cell (1 or 9)
+    std::size_t cells = 0;      // the window's cells (the flat index divides by it)
+    int win_w = 0;              // the window's width in cells
+    int win_x0 = 0, win_y0 = 0;  // the window's origin on the board lattice
+    std::size_t block_bytes() const { return sizeof(Block) + cap * sizeof(SNode); }
 
     // Once per search, before the generation is bumped: the dense store grows as it always has; the paged store
-    // sizes its directory to the window's states and takes the search's budget; retained blocks past that budget are released (below).
-    void prepare(bool use_paged, std::size_t states, std::size_t budget_bytes) {
+    // takes the search's window and budget and (re)sizes its tile directory to the board when the geometry moved.
+    void prepare(bool use_paged, std::size_t states, std::size_t budget_bytes, int w_w, int w_h, int w_x0, int w_y0,
+                 int board_nx, int board_ny, int layers, std::size_t d) {
       paged = use_paged;
       if (!paged) {
         if (dense.size() < states) dense.assign(states, SNode{0, 0, -1});
         return;
       }
       budget = budget_bytes;
+      per_cell = static_cast<std::size_t>(layers) * d;
+      const int ntx = (board_nx + (1 << kTileShift) - 1) >> kTileShift;
+      const int nty = (board_ny + (1 << kTileShift) - 1) >> kTileShift;
+      const std::size_t ncap = kTileCells * static_cast<std::size_t>(layers) * d;
+      if (ntx != tiles_x || nty != tiles_y || ncap != cap) {
+        blocks.clear();
+        used = 0;
+        tiles_x = ntx;
+        tiles_y = nty;
+        cap = ncap;
+        blocks.resize(static_cast<std::size_t>(tiles_x) * static_cast<std::size_t>(tiles_y));
+      }
       // A hard cap on what the store retains between searches (hardening #15): a search's records are dead once
       // it ends and blocks are only kept to be reused, so when what is retained passes the budget the blocks are
       // released outright, instead of searches over disjoint regions growing the store back towards dense size.
       if (budget_bytes > 0 && used > budget_bytes) {
         blocks.clear();
         used = 0;
+        blocks.resize(static_cast<std::size_t>(tiles_x) * static_cast<std::size_t>(tiles_y));
       }
-      const std::size_t need = (states + kBlock - 1) / kBlock;
-      if (blocks.size() < need) blocks.resize(need);
+      win_w = w_w;
+      win_x0 = w_x0;
+      win_y0 = w_y0;
+      cells = static_cast<std::size_t>(w_w) * static_cast<std::size_t>(w_h);
+      dirs = d;
     }
     // Once per search, with the search's generation: the paged store takes it as its epoch (its blocks then clear
     // lazily as they are touched); the dense store needs nothing (its records carry the generation in the tag).
@@ -193,50 +226,176 @@ struct Router::Impl {
       for (auto& b : blocks)
         if (b) b->epoch = 0;
     }
+    // The flat state index ((layer * cells + cell) * dirs + dir, cell row-major in the window) decoded to its tile
+    // block and the record's offset inside it. The window's origin places the cell on the board lattice, whose
+    // tiles the directory is cut by.
+    void locate(std::size_t i, std::size_t& blk, std::size_t& off) const {
+      const std::size_t dir = dirs > 1 ? i % dirs : 0;
+      const std::size_t lc = dirs > 1 ? i / dirs : i;
+      const std::size_t layer = lc / cells;
+      const std::size_t ci = lc - layer * cells;
+      const std::size_t cx = ci % static_cast<std::size_t>(win_w);
+      const std::size_t cy = ci / static_cast<std::size_t>(win_w);
+      const std::size_t bx = static_cast<std::size_t>(win_x0) + cx;
+      const std::size_t by = static_cast<std::size_t>(win_y0) + cy;
+      blk = (by >> kTileShift) * static_cast<std::size_t>(tiles_x) + (bx >> kTileShift);
+      // The within-tile offset uses the BOARD coordinates (bx, by), like CompanionStore's: the
+      // window-local (cx, cy) used before permuted each tile's slots whenever the window origin
+      // was not tile-aligned -- injective, so no search ever read another cell's record, but the
+      // permutation scattered a tile's rows and disagreed with the companion stores' layout.
+      off = (((by & ((1 << kTileShift) - 1)) << kTileShift) + (bx & ((1 << kTileShift) - 1))) * per_cell +
+            layer * dirs + dir;
+    }
     SNode& operator[](std::size_t i) {
       if (!paged) return dense[i];
-      Block* b = blocks[i >> kBlockShift].get();
+      std::size_t blk, off;
+      locate(i, blk, off);
+      Block* b = blocks[blk].get();
       if (!b) {
         auto nb = std::make_unique<Block>();
-        used += sizeof(Block);
+        nb->v = std::make_unique<SNode[]>(cap);
+        used += block_bytes();
         b = nb.get();
-        blocks[i >> kBlockShift] = std::move(nb);
+        blocks[blk] = std::move(nb);
       }
       if (b->epoch != epoch) {
-        b->v.fill(SNode{0, 0, -1});
+        std::fill(b->v.get(), b->v.get() + cap, SNode{0, 0, -1});
         b->epoch = epoch;
         // The budget counts the blocks a search touches (stamps for its generation), not only the ones it
-        // happens to allocate first: whether a block was already retained by an earlier search over the same
-        // ground must not decide whether this search is over budget (hardening #15).
-        touched += sizeof(Block);
+        // happens to allocate first (hardening #15).
+        touched += block_bytes();
         if (budget > 0 && touched > budget) overflowed = true;
       }
-      return b->v[i & (kBlock - 1)];
+      return b->v[off];
     }
     const SNode& operator[](std::size_t i) const {
       if (!paged) return dense[i];
-      const Block* b = blocks[i >> kBlockShift].get();
+      std::size_t blk, off;
+      locate(i, blk, off);
+      const Block* b = blocks[blk].get();
       if (!b || b->epoch != epoch) {
         static const SNode kUntouched{0, 0, -1};
         return kUntouched;
       }
-      return b->v[i & (kBlock - 1)];
+      return b->v[off];
     }
   };
   NodeStore sn;
   std::vector<std::uint32_t> cstamp, vstamp;
   std::vector<std::uint8_t> cell_state, via_state;  // 0 unknown, 1 free, 2 blocked (valid when stamp matches)
   std::vector<std::int64_t> cell_hist;  // history cost per cell (valid when cstamp matches)
+  // The per-cell legality caches above (cstamp/cell_state/cell_hist, vstamp/via_state) behind the same board
+  // tiling as the NodeStore when --paged-nodes is on. Dense, they are vectors sized to the largest search window
+  // seen, so a board whose searches run near board-sized windows pays cells x layers x 18 B per variant thread
+  // whether the search touches that ground or not (the mini_mass 8-variant OOM: ~23 GB with both stores paged).
+  // Paged, a block holds one 16x16 tile: per layer a stamp/state/history triple (3,328 B), plus one via
+  // stamp/state block per tile (1,280 B), allocated on first touch. Entries keep their dense semantics exactly
+  // -- a per-entry generation stamp invalidates and the value is recomputed on a miss -- so a paged run routes
+  // identically to a dense one; only where the bytes live changes. Blocks are retained between searches for
+  // reuse and released outright when what is retained passes the --search-mem budget, the NodeStore's own
+  // retention rule. The flood/target arrays (rstamp/bstamp/is_target) stay dense: window-sized, and the stamps
+  // allocate only when the late reachability proof runs.
+  struct CompanionStore {
+    struct CellBlock {
+      std::uint32_t stamp[NodeStore::kTileCells] = {};
+      std::uint8_t state[NodeStore::kTileCells] = {};
+      std::int64_t hist[NodeStore::kTileCells] = {};
+    };
+    struct ViaBlock {
+      std::uint32_t stamp[NodeStore::kTileCells] = {};
+      std::uint8_t state[NodeStore::kTileCells] = {};
+    };
+    struct Tile {
+      std::vector<std::unique_ptr<CellBlock>> layers;
+      std::unique_ptr<ViaBlock> via;
+    };
+    bool paged = false;
+    std::vector<std::unique_ptr<Tile>> tiles;  // tiles_y * tiles_x entries
+    int tiles_x = 0, tiles_y = 0, layers = 0;
+    std::size_t used = 0;    // bytes of blocks in the directory now
+    std::size_t budget = 0;  // retention cap between searches (0 = no limit)
+    void prepare(bool use_paged, int board_nx, int board_ny, int nl, std::size_t budget_bytes) {
+      paged = use_paged;
+      if (!paged) return;
+      budget = budget_bytes;
+      const int ntx = (board_nx + (1 << NodeStore::kTileShift) - 1) >> NodeStore::kTileShift;
+      const int nty = (board_ny + (1 << NodeStore::kTileShift) - 1) >> NodeStore::kTileShift;
+      if (ntx != tiles_x || nty != tiles_y || nl != layers) {
+        tiles.clear();
+        used = 0;
+        tiles_x = ntx;
+        tiles_y = nty;
+        layers = nl;
+        tiles.resize(static_cast<std::size_t>(tiles_x) * static_cast<std::size_t>(tiles_y));
+      }
+      if (budget > 0 && used > budget) {  // retained caches are dead weight past the cap: release, as NodeStore does
+        tiles.clear();
+        used = 0;
+        tiles.resize(static_cast<std::size_t>(tiles_x) * static_cast<std::size_t>(tiles_y));
+      }
+    }
+    Tile& tile(int gx, int gy) {
+      const std::size_t blk = static_cast<std::size_t>(gy >> NodeStore::kTileShift) * static_cast<std::size_t>(tiles_x) +
+                              static_cast<std::size_t>(gx >> NodeStore::kTileShift);
+      if (!tiles[blk]) {
+        auto t = std::make_unique<Tile>();
+        t->layers.resize(static_cast<std::size_t>(layers));
+        tiles[blk] = std::move(t);
+      }
+      return *tiles[blk];
+    }
+    static std::size_t off(int gx, int gy) {
+      return static_cast<std::size_t>((gy & ((1 << NodeStore::kTileShift) - 1)) << NodeStore::kTileShift) +
+             static_cast<std::size_t>(gx & ((1 << NodeStore::kTileShift) - 1));
+    }
+    struct CellSlot { std::uint32_t* stamp; std::uint8_t* state; std::int64_t* hist; };
+    CellSlot cell(int layer, int gx, int gy) {
+      Tile& t = tile(gx, gy);
+      auto& b = t.layers[static_cast<std::size_t>(layer)];
+      if (!b) {
+        b = std::make_unique<CellBlock>();
+        used += sizeof(CellBlock);
+      }
+      const std::size_t o = off(gx, gy);
+      return {&b->stamp[o], &b->state[o], &b->hist[o]};
+    }
+    struct ViaSlot { std::uint32_t* stamp; std::uint8_t* state; };
+    ViaSlot via(int gx, int gy) {
+      Tile& t = tile(gx, gy);
+      if (!t.via) {
+        t.via = std::make_unique<ViaBlock>();
+        used += sizeof(ViaBlock);
+      }
+      const std::size_t o = off(gx, gy);
+      return {&t.via->stamp[o], &t.via->state[o]};
+    }
+    // Read without allocating (the enclosed-cell debug scan): an untouched tile reads as never stamped.
+    std::pair<std::uint32_t, std::uint8_t> cell_peek(int layer, int gx, int gy) const {
+      const std::size_t blk = static_cast<std::size_t>(gy >> NodeStore::kTileShift) * static_cast<std::size_t>(tiles_x) +
+                              static_cast<std::size_t>(gx >> NodeStore::kTileShift);
+      const Tile* t = tiles[blk].get();
+      if (!t || !t->layers[static_cast<std::size_t>(layer)]) return {0, 0};
+      const CellBlock& b = *t->layers[static_cast<std::size_t>(layer)];
+      const std::size_t o = off(gx, gy);
+      return {b.stamp[o], b.state[o]};
+    }
+    // The generation wrapped: every stamp is stale. Zero the stamps in place; the states and histories they
+    // guarded are unreachable behind a zero stamp, exactly as the dense fills leave them.
+    void clear_stamps() {
+      for (auto& t : tiles) {
+        if (!t) continue;
+        for (auto& b : t->layers)
+          if (b) std::fill(std::begin(b->stamp), std::end(b->stamp), 0u);
+        if (t->via) std::fill(std::begin(t->via->stamp), std::end(t->via->stamp), 0u);
+      }
+    }
+  };
+  CompanionStore comp;
   std::uint32_t gen = 0;
   // (net and width, layer-cell key) blocked by FIXED copper after exact-check failures (routed copper changes,
   // so conflicts with it are not learned permanently). Probed once per newly stamped cell in cell_cost, so it
   // is a flat hash set, not an ordered tree; membership semantics are unchanged.
-  struct PairHash {
-    std::size_t operator()(const std::pair<std::int64_t, std::int64_t>& p) const noexcept {
-      return static_cast<std::size_t>(splitmix64(static_cast<std::uint64_t>(p.first) ^ splitmix64(static_cast<std::uint64_t>(p.second))));
-    }
-  };
-  std::unordered_set<std::pair<std::int64_t, std::int64_t>, PairHash> learned_block;
+  core::FlatPairSet learned_block;  // Stage 2B: flat set replaces std::unordered_set (same reasoning as history)
   std::int64_t block_owner(NetId net) const { return static_cast<std::int64_t>(net) * 10'000'000 + track_width(net) / 1000; }
 
   // ---- negotiation state ----
@@ -281,7 +440,7 @@ struct Router::Impl {
     return n >= 0 && static_cast<std::size_t>(n) < crit_rank.size() && crit_rank[static_cast<std::size_t>(n)] > 0 ? crit_rank[static_cast<std::size_t>(n)] : 1000;
   }
   double via_mult_of(NetId n) const { return n >= 0 && static_cast<std::size_t>(n) < net_via_mult.size() ? net_via_mult[static_cast<std::size_t>(n)] : 1.0; }
-  std::unordered_map<std::int64_t, std::uint16_t> history;  // contested lattice cells (PathFinder history cost)
+  core::FlatU64U16 history;  // contested lattice cells (PathFinder history cost); flat map: ~1e8 finds per large job
   std::vector<int> init_root;        // copper item -> initial cluster root (fixed copper)
   // With soft zones: routed copper item -> initial clusters of the same-net plane fills it touches, so a via that
   // passes through several planes of its net joins all of them (`joined`). Teardrops are no planes.
@@ -355,8 +514,16 @@ struct Router::Impl {
   double budget_scale = 1.0;  // < 1 while a share of the budget is reserved for the polish phase (opt.polish_fraction)
   // Set when wall time, not work, ended the search: the result then depends on machine speed (reported, never read here).
   mutable bool time_stopped = false;
+  mutable bool deadline_stopped = false;  // the shared portfolio deadline (a sibling completed) ended the search
   bool out_of_budget() const {
-    if (opt.deadline && res.routed < res.connections && elapsed() > opt.deadline->load(std::memory_order_relaxed)) return time_stopped = true;
+    if (opt.deadline && res.routed < res.connections && elapsed() > opt.deadline->load(std::memory_order_relaxed)) {
+      // Only the first wall-clock stop classifies the run: if this search already stopped on its OWN
+      // time limit in an earlier phase, a sibling's later deadline must not reclassify that stop as a
+      // deadline stop -- the portfolio aggregation (time_limited && !deadline_stopped) would erase
+      // the real timeout from the report.
+      if (!time_stopped) deadline_stopped = true;
+      return time_stopped = true;
+    }
     if (opt.work_budget > 0 && static_cast<double>(res.expansions) >= static_cast<double>(opt.work_budget) * budget_scale) return true;
     if (elapsed() > opt.time_limit_s * budget_scale) return time_stopped = true;
     return false;
@@ -997,8 +1164,8 @@ struct Router::Impl {
   }
   std::int64_t hist_cost(int layer, int gx, int gy) const {
     if (history.empty()) return 0;
-    const auto it = history.find(cell_key(layer, gx, gy));
-    return it == history.end() ? 0 : static_cast<std::int64_t>(static_cast<double>(it->second) * static_cast<double>(pitch) * opt.history_weight);
+    const std::uint16_t* hv = history.find(static_cast<std::uint64_t>(cell_key(layer, gx, gy)));
+    return hv == nullptr ? 0 : static_cast<std::int64_t>(static_cast<double>(*hv) * static_cast<double>(pitch) * opt.history_weight);
   }
   // Consecutive per-cell lookups usually use the same net and width.
   NetId cc_net = -1;
@@ -1108,21 +1275,34 @@ struct Router::Impl {
 
   // Extra cost of entering a cell: -1 blocked, 0 free, > 0 crossing routed copper (soft mode only).
   std::int64_t cell_cost(const Window& w, int layer, int cx, int cy, NetId net, Coord hw) {
-    const std::size_t idx = (static_cast<std::size_t>(layer) * static_cast<std::size_t>(w.h) + static_cast<std::size_t>(cy)) * static_cast<std::size_t>(w.w) + static_cast<std::size_t>(cx);
     const int gx = w.x0 + cx, gy = w.y0 + cy;
-    if (cstamp[idx] != gen) {
-      cstamp[idx] = gen;
+    std::uint32_t* stamp_p;
+    std::uint8_t* state_p;
+    std::int64_t* hist_p;
+    if (comp.paged) {
+      const auto s = comp.cell(layer, gx, gy);
+      stamp_p = s.stamp;
+      state_p = s.state;
+      hist_p = s.hist;
+    } else {
+      const std::size_t idx = (static_cast<std::size_t>(layer) * static_cast<std::size_t>(w.h) + static_cast<std::size_t>(cy)) * static_cast<std::size_t>(w.w) + static_cast<std::size_t>(cx);
+      stamp_p = &cstamp[idx];
+      state_p = &cell_state[idx];
+      hist_p = &cell_hist[idx];
+    }
+    if (*stamp_p != gen) {
+      *stamp_p = gen;
       const std::int64_t key = cell_key(layer, gx, gy);
       ++obs->checks;
       ++wc().cell_checks;
-      cell_state[idx] = static_cast<std::uint8_t>(!learned_block.empty() && learned_block.count({block_owner(net), key}) ? 2 : point_state(layer, gx, gy, net, hw));
-      cell_hist[idx] = cell_state[idx] == 2 ? 0 : hist_cost(layer, gx, gy);  // history only changes between searches
+      *state_p = static_cast<std::uint8_t>(!learned_block.empty() && learned_block.contains(block_owner(net), key) ? 2 : point_state(layer, gx, gy, net, hw));
+      *hist_p = *state_p == 2 ? 0 : hist_cost(layer, gx, gy);  // history only changes between searches
     }
-    const int st = cell_state[idx];
+    const int st = *state_p;
     if (st == 2) return -1;
     const std::int64_t rc = reserved_cost(layer, gx, gy, net);
     if (rc < 0) return -1;
-    std::int64_t hc = cell_hist[idx] + rc;
+    std::int64_t hc = *hist_p + rc;
     if (bus_mode != 0 && !bus_guide[lat_index(layer, gx, gy)]) {  // bus lane: off the neighbour lane's guide (doc 05 §38)
       if (bus_mode == 2) return -1;
       hc += bus_pen;
@@ -1172,10 +1352,20 @@ struct Router::Impl {
   }
   std::int64_t via_cost_at(const Window& w, int cx, int cy, NetId net, Coord d, Coord drill) {
     if (!vias_ok(net)) return -1;
-    const std::size_t idx = static_cast<std::size_t>(cy) * static_cast<std::size_t>(w.w) + static_cast<std::size_t>(cx);
-    if (vstamp[idx] != gen) {
-      vstamp[idx] = gen;
-      const int gx = w.x0 + cx, gy = w.y0 + cy;
+    const int gx = w.x0 + cx, gy = w.y0 + cy;
+    std::uint32_t* vstamp_p;
+    std::uint8_t* vstate_p;
+    if (comp.paged) {
+      const auto s = comp.via(gx, gy);
+      vstamp_p = s.stamp;
+      vstate_p = s.state;
+    } else {
+      const std::size_t idx = static_cast<std::size_t>(cy) * static_cast<std::size_t>(w.w) + static_cast<std::size_t>(cx);
+      vstamp_p = &vstamp[idx];
+      vstate_p = &via_state[idx];
+    }
+    if (*vstamp_p != gen) {
+      *vstamp_p = gen;
       const Point p = at(gx, gy);
       const Coord margin = pitch * 71 / 100 + 1;
       int st;
@@ -1200,9 +1390,9 @@ struct Router::Impl {
           st = obs->routed_via_state(probe_disk, near, net, soft, drill / 2 + margin);
         }
       }
-      via_state[idx] = static_cast<std::uint8_t>(st);
+      *vstate_p = static_cast<std::uint8_t>(st);
     }
-    if (via_state[idx] == 2) return -1;
+    if (*vstate_p == 2) return -1;
     std::int64_t extra = 0;
     for (int l = 0; l < nl && !reserve.empty(); ++l) {
       const std::int64_t rc = reserved_cost(l, w.x0 + cx, w.y0 + cy, net);
@@ -1220,7 +1410,7 @@ struct Router::Impl {
       const std::int32_t r = pinvia[static_cast<std::size_t>(w.y0 + cy) * static_cast<std::size_t>(nx) + static_cast<std::size_t>(w.x0 + cx)];
       if (r != 0 && r != static_cast<std::int32_t>(net)) extra += pin_via_cost;
     }
-    return extra + (via_state[idx] == 1 ? soft_unit : 0);
+    return extra + (*vstate_p == 1 ? soft_unit : 0);
   }
   // --pin-via-pen (D156, M22 item 6): lattice point -> net of the dense-package pin whose fan-out region (pin_via_mm past its copper plus a
   // via's radius and clearance) holds it, -1 for two nets' regions, 0 none. Vias of other nets there pay pin_via_cost: on the failing boards
@@ -1884,20 +2074,26 @@ struct Router::Impl {
     const std::size_t cells = static_cast<std::size_t>(w.w) * static_cast<std::size_t>(w.h);
     const std::size_t D = opt.bend_states && !mem_fast_bends ? 9 : 1;  // direction states per lattice point
     const std::size_t states = cells * static_cast<std::size_t>(nl) * D;
-    sn.prepare(opt.paged_nodes, states, opt.search_mem_mb > 0 ? static_cast<std::size_t>(opt.search_mem_mb) * 1024 * 1024 : 0);
-    if (cstamp.size() < cells * static_cast<std::size_t>(nl)) {
-      cstamp.assign(cells * static_cast<std::size_t>(nl), 0);
-      cell_state.resize(cells * static_cast<std::size_t>(nl));
-      cell_hist.resize(cells * static_cast<std::size_t>(nl));
-    }
-    if (vstamp.size() < cells) {
-      vstamp.assign(cells, 0);
-      via_state.resize(cells);
+    sn.prepare(opt.paged_nodes, states, opt.search_mem_mb > 0 ? static_cast<std::size_t>(opt.search_mem_mb) * 1024 * 1024 : 0, w.w, w.h, w.x0, w.y0, nx, ny, nl, D);
+    comp.prepare(opt.paged_nodes, nx, ny, nl, opt.search_mem_mb > 0 ? static_cast<std::size_t>(opt.search_mem_mb) * 1024 * 1024 : 0);
+    if (!opt.paged_nodes) {
+      if (cstamp.size() < cells * static_cast<std::size_t>(nl)) {
+        cstamp.assign(cells * static_cast<std::size_t>(nl), 0);
+        cell_state.resize(cells * static_cast<std::size_t>(nl));
+        cell_hist.resize(cells * static_cast<std::size_t>(nl));
+      }
+      if (vstamp.size() < cells) {
+        vstamp.assign(cells, 0);
+        via_state.resize(cells);
+      }
     }
     if (++gen > kGenMask) {
       sn.clear_all();
-      std::fill(cstamp.begin(), cstamp.end(), 0u);
-      std::fill(vstamp.begin(), vstamp.end(), 0u);
+      if (opt.paged_nodes) comp.clear_stamps();
+      else {
+        std::fill(cstamp.begin(), cstamp.end(), 0u);
+        std::fill(vstamp.begin(), vstamp.end(), 0u);
+      }
       std::fill(rstamp.begin(), rstamp.end(), 0u);
       std::fill(bstamp.begin(), bstamp.end(), 0u);
       gen = 1;
@@ -2107,13 +2303,95 @@ struct Router::Impl {
     auto sidx = [&](int l, std::int64_t ci, int dir) {
       return ((static_cast<std::size_t>(l) * cells + static_cast<std::size_t>(ci)) * D) + (D == 9 ? static_cast<std::size_t>(dir) : 0);
     };
-    // Open list: a min-heap of (f, key). The key is the state index; with tie_deep, ties on f go first to the larger g, in
-    // units of 256 (saturating at 2^32), then to the lower state index (states < 2^31: parents are int32). Its container is
-    // reachable so a field built during the search can re-key it (a priority_queue of pairs is faster here than a vector
-    // with a heap of structs: 4-8 % of the run on sbc and logicbone).
+    // Open list: entries pop in the total order (f, key). The key is the state index; with tie_deep, ties on f go first
+    // to the larger g, in units of 256 (saturating at 2^32), then to the lower state index (states < 2^31: parents are
+    // int32). Stage 2B: a radix heap over the (f, key) composite key replaces the binary heap
+    // (measured ~2x per op at the 65k-entry average frontier of a large search; heap ops were ~10 % of search time).
+    // Extraction follows the same total order, so trajectories are unchanged. A* extraction is monotone except that
+    // the weighted heuristic can generate a child whose f dips below the last extracted f; those rare inserts take a
+    // binary-heap sidecar and pop merges the two minima, so the order is exact in all cases. A field built during the
+    // search re-keys the whole list through drain()/refill().
     using QE = std::pair<std::int64_t, std::uint64_t>;
-    struct OpenList : std::priority_queue<QE, std::vector<QE>, std::greater<>> {
-      using std::priority_queue<QE, std::vector<QE>, std::greater<>>::c;
+    struct OpenList {
+      // The composite key is (f, key) with f sign-flipped into unsigned order; it is handled as a pair of
+      // uint64 halves throughout (no __int128: -Wpedantic rejects it, and the pair form is portable).
+      static std::uint64_t fu_of(const QE& e) { return static_cast<std::uint64_t>(e.first) ^ (std::uint64_t{1} << 63); }
+      static bool less(const QE& a, const QE& b) {  // the total order, on transformed f
+        const std::uint64_t fa = fu_of(a), fb = fu_of(b);
+        return fa != fb ? fa < fb : a.second < b.second;
+      }
+      std::uint64_t last_fu = 0, last_key = 0;  // extraction watermark; every bucketed entry is >= it
+      int bucket_of(std::uint64_t fu, std::uint64_t key) const {
+        const std::uint64_t df = fu ^ last_fu;
+        if (df) return 65 + (63 - std::countl_zero(df));
+        const std::uint64_t dk = key ^ last_key;
+        if (dk) return 1 + (63 - std::countl_zero(dk));
+        return 0;
+      }
+      std::vector<QE> buckets[129];
+      std::size_t sz = 0;
+      std::priority_queue<QE, std::vector<QE>, std::greater<>> overflow;  // inserts below the watermark
+      void emplace(std::int64_t f, std::uint64_t key) {
+        const QE e{f, key};
+        const std::uint64_t fu = fu_of(e);
+        if (fu < last_fu || (fu == last_fu && key < last_key)) {
+          overflow.push(e);
+          return;
+        }
+        buckets[bucket_of(fu, key)].push_back(e);
+        ++sz;
+      }
+      bool empty() const { return sz == 0 && overflow.empty(); }
+      std::size_t size() const { return sz + overflow.size(); }
+      bool radix_min(QE& out) {  // leaves the minimum in bucket 0 (redistributing one bucket) and returns it
+        if (sz == 0) return false;
+        if (buckets[0].empty()) {
+          int i = 1;
+          while (buckets[i].empty()) ++i;
+          auto& b = buckets[i];
+          QE mn = b[0];
+          for (const auto& e : b)
+            if (less(e, mn)) mn = e;
+          last_fu = fu_of(mn);
+          last_key = mn.second;
+          for (const auto& e : b) buckets[bucket_of(fu_of(e), e.second)].push_back(e);
+          b.clear();
+        }
+        out = buckets[0].back();
+        return true;
+      }
+      QE top() {
+        QE rp{};
+        const bool hr = radix_min(rp);
+        if (!overflow.empty() && (!hr || less(overflow.top(), rp))) return overflow.top();
+        return rp;
+      }
+      void pop() {
+        QE rp{};
+        const bool hr = radix_min(rp);
+        if (!overflow.empty() && (!hr || less(overflow.top(), rp))) {
+          overflow.pop();
+          return;
+        }
+        buckets[0].pop_back();
+        --sz;
+      }
+      void drain(std::vector<QE>& out) {  // every entry, unordered; resets the watermark for refill()
+        for (auto& b : buckets) {
+          for (const auto& e : b) out.push_back(e);
+          b.clear();
+        }
+        sz = 0;
+        while (!overflow.empty()) {
+          out.push_back(overflow.top());
+          overflow.pop();
+        }
+        last_fu = 0;
+        last_key = 0;
+      }
+      void refill(const std::vector<QE>& in) {
+        for (const auto& e : in) emplace(e.first, e.second);
+      }
     } open;
     const bool tie_deep = opt.tie_deep;
     auto qkey = [&](std::int64_t g, std::size_t st) -> std::uint64_t {
@@ -2217,7 +2495,10 @@ struct Router::Impl {
           if (e.first - h(static_cast<int>(elc / cells), w.x0 + static_cast<int>(ci2 % w.w), w.y0 + static_cast<int>(ci2 / w.w)) <= sn[es].g) kept.push_back(e);
         };
         keep(QE{f, qkey(sn[s].g, s)});  // the state being expanded goes back too: the new key may put another state first
-        for (const auto& e : open.c) keep(e);
+        std::vector<QE> all;
+        all.reserve(open.size());
+        open.drain(all);
+        for (const auto& e : all) keep(e);
         make_field();
         ++field_late;
         for (auto& e : kept) {
@@ -2225,8 +2506,7 @@ struct Router::Impl {
           const std::int64_t ci2 = static_cast<std::int64_t>(elc % cells);
           e.first = sn[es].g + h(static_cast<int>(elc / cells), w.x0 + static_cast<int>(ci2 % w.w), w.y0 + static_cast<int>(ci2 / w.w));
         }
-        open.c = std::move(kept);
-        std::make_heap(open.c.begin(), open.c.end(), std::greater<>{});
+        open.refill(kept);
         --expanded;  // the state was not expanded
         continue;
       }
@@ -2370,12 +2650,22 @@ struct Router::Impl {
         // Classify the rejected neighbours of every expanded cell (diagnostics).
         long fixed = 0, learned = 0, other = 0, startcells = static_cast<long>(src.cells.size());
         for (std::size_t lc = 0; lc < cells * static_cast<std::size_t>(nl); ++lc) {
-          if (cstamp[lc] != gen) continue;
-          if (cell_state[lc] != 2) continue;
           const int l = static_cast<int>(lc / cells);
           const std::int64_t ci = static_cast<std::int64_t>(lc % cells);
           const int gx = w.x0 + static_cast<int>(ci % w.w), gy = w.y0 + static_cast<int>(ci / w.w);
-          if (learned_block.count({block_owner(net), cell_key(l, gx, gy)})) ++learned;
+          std::uint32_t stamp_lc;
+          std::uint8_t state_lc;
+          if (comp.paged) {
+            const auto pk = comp.cell_peek(l, gx, gy);
+            stamp_lc = pk.first;
+            state_lc = pk.second;
+          } else {
+            stamp_lc = cstamp[lc];
+            state_lc = cell_state[lc];
+          }
+          if (stamp_lc != gen) continue;
+          if (state_lc != 2) continue;
+          if (learned_block.contains(block_owner(net), cell_key(l, gx, gy))) ++learned;
           else if (obs->disk_state(at(gx, gy), l, hw, net, 0, true) == 2) {
             ++fixed;
             if (std::getenv("TM_DEBUG_ENCLOSED")[0] == '2' && fixed % 8 == 0)
@@ -2667,7 +2957,7 @@ struct Router::Impl {
       // can be blocked.
       if ((qb.intersects(ia) && on_pad_copper(q, c.pad_a, s.layer)) || (c.pad_b >= 0 && qb.intersects(ib) && on_pad_copper(q, c.pad_b, s.layer))) continue;
       if (obs->disk_state(q, s.layer, width / 2, c.net, 0, /*ignore_routed=*/true) == 2) {
-        learned_block.insert({block_owner(c.net), cell_key(s.layer, to_ix(q.x), to_iy(q.y))});
+        learned_block.insert(block_owner(c.net), cell_key(s.layer, to_ix(q.x), to_iy(q.y)));
         ++learned;
       }
     }
@@ -2678,7 +2968,7 @@ struct Router::Impl {
         const Point q{s.a.x + (s.b.x - s.a.x) * k / n, s.a.y + (s.b.y - s.a.y) * k / n};
         if (on_pad_copper(q, c.pad_a, s.layer) || (c.pad_b >= 0 && on_pad_copper(q, c.pad_b, s.layer))) continue;
         if ((k == 0 || k == n) && n > 1) continue;  // interior points suffice for longer steps
-        learned_block.insert({block_owner(c.net), cell_key(s.layer, to_ix(q.x), to_iy(q.y))});
+        learned_block.insert(block_owner(c.net), cell_key(s.layer, to_ix(q.x), to_iy(q.y)));
       }
     }
   }
@@ -2690,7 +2980,7 @@ struct Router::Impl {
       const Point q{s.a.x + (s.b.x - s.a.x) * k / n, s.a.y + (s.b.y - s.a.y) * k / n};
       std::vector<int> owners;
       if (obs->disk_state(q, s.layer, track_width(net) / 2, net, 0, true, &owners) == 1) {
-        auto& h = history[cell_key(s.layer, to_ix(q.x), to_iy(q.y))];
+        auto& h = history[static_cast<std::uint64_t>(cell_key(s.layer, to_ix(q.x), to_iy(q.y)))];
         if (h < 60000) h = static_cast<std::uint16_t>(h + 1);
       }
     }
@@ -3527,7 +3817,10 @@ struct Router::Impl {
     emit(heat_exp.message("expansions", -1));
     heat_hist.clear();
     // Iterating the hash map is fine here: raise() keeps the maximum per cell, which does not depend on order.
-    for (const auto& [key, hv] : history) {
+    for (std::size_t hi = 0; hi < history.slot_count(); ++hi) {
+      if (!history.slot_used(hi)) continue;
+      const std::uint64_t key = history.key_at(hi);
+      const std::uint16_t hv = history.value_at(hi);
       const int gx = static_cast<int>(key & 0xFFFFFF), gy = static_cast<int>((key >> 24) & 0xFFFFFF);
       if (gx < nx && gy < ny) heat_hist.raise(at(gx, gy), hv);
     }
@@ -6863,6 +7156,7 @@ struct Router::Impl {
       }
       res.seconds = elapsed();
       res.time_limited = time_stopped;
+    res.deadline_stopped = deadline_stopped;
       res.cache_evictions = cache_evictions;
       res.obstacle_caches = static_cast<int>(caches.size());
       return res;
@@ -7220,10 +7514,7 @@ struct Router::Impl {
       if (restart > opt.max_restarts) {
         nogoods.clear();
         rip_cap += 2;
-        for (auto it = history.begin(); it != history.end();) {
-          it->second = static_cast<std::uint16_t>(it->second / 2);
-          it = it->second == 0 ? history.erase(it) : std::next(it);
-        }
+        history.decay_half();  // exact-once even across the slot ring's wrap (see flat_map.hpp)
         const RngStream rr(opt.seed, 0x5E57u, static_cast<std::uint64_t>(restart));
         std::vector<double> tie(cs.size());
         for (std::size_t i = 0; i < cs.size(); ++i) tie[i] = rr.uniform(i);
@@ -7715,6 +8006,7 @@ struct Router::Impl {
     emit_stats("done");
     emit("{\"type\":\"stage\",\"name\":\"route\",\"state\":\"end\",\"detail\":\"\"}");
     res.time_limited = time_stopped;
+    res.deadline_stopped = deadline_stopped;
     res.cache_evictions = cache_evictions;
     res.obstacle_caches = static_cast<int>(caches.size());
     return std::move(res);
@@ -7815,6 +8107,7 @@ static bool load_state(const std::string& path, std::vector<ConnRoute>& routes, 
 PortfolioResult route_portfolio(const model::Board& board, const model::DesignRules& rules, const RouterOptions& base_in, int variants,
                                 const std::vector<int>& pick, int threads) {
   RouterOptions base = base_in;
+  const bool rounds_given = base_in.rounds > 0;          // issue #21: an explicit --rounds cap was supplied
   if (base.relax) {  // relax, route, legalise (doc 05 §41.3): the stages and the breathing are defaults of one switch
     const double c_board = nm_to_mm(std::max(rules.classes.empty() ? Coord{0} : rules.classes.front().clearance, rules.minimums.clearance));
     if (base.ramp_from_mm <= 0) base.ramp_from_mm = 0.6 * c_board;
@@ -7981,6 +8274,7 @@ PortfolioResult route_portfolio(const model::Board& board, const model::DesignRu
                   base.relax ? "relax" : !base.state_in.empty() || base.start_routes ? "a warm start" : "rounds", vs.size(), threads,
                   threads == 1 ? "" : "s");
   if (halve && !rounds_asked) {
+    parallel::PrimaryScope primary_workers(threads);  // Stage 2B #19: the rung pools are the job primary workers
     // Rung sizes n, n/2, ... down to `threads`.
     std::vector<std::size_t> sizes{vs.size()};
     while (sizes.back() > static_cast<std::size_t>(threads)) sizes.push_back(std::max(static_cast<std::size_t>(threads), sizes.back() / 2));
@@ -8061,8 +8355,14 @@ PortfolioResult route_portfolio(const model::Board& board, const model::DesignRu
   // Once a variant is complete the others get a short grace period, so the best-quality complete result can be
   // chosen. With a work budget the run must stay deterministic, so this is only used under wall-clock limits.
   std::atomic<double> deadline{1e30};
+  // Sibling early-stop (issue #20): the first complete variant sets the shared deadline and the
+  // siblings drain against it. Auto (the default) enables it for wall-clock runs only: under a
+  // work budget (either kind) the winner would depend on thread timing, which the determinism
+  // contract forbids. --early-stop forces it (the run then reports not deterministic when it
+  // fires); --no-early-stop disables it everywhere.
+  const bool use_deadline = base.early_stop > 0 || (base.early_stop == 0 && base.work_budget == 0 && base.round_work == 0);
   for (auto& v : vs)
-    if (base.work_budget == 0) v.o.deadline = &deadline;
+    if (use_deadline) v.o.deadline = &deadline;
   // Event buffers per variant (recording mode): the winner's events are replayed into base.sink afterwards.
   struct BufferSink final : events::Sink {
     std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
@@ -8082,8 +8382,9 @@ PortfolioResult route_portfolio(const model::Board& board, const model::DesignRu
     }
   // Variants are taken in index order by `threads` workers. Which thread runs a variant, and when, cannot change its
   // result: each Router owns all of its state, its clock starts when it starts, and in work-budget mode nothing is
-  // shared between variants (the shared deadline is wall-clock mode only).
+  // shared between variants (the shared deadline is wall-clock mode only, unless --early-stop forces it: then the winner may depend on timing and the run says so).
   const std::size_t workers = threads <= 0 ? vs.size() : std::min(vs.size(), static_cast<std::size_t>(threads));
+  parallel::PrimaryScope primary_workers(static_cast<int>(workers));  // Stage 2B #19: registered while any portfolio pool runs, so secondary stages (zone refill inside a search) stay under the cap
   // Total order on (routed desc, vias asc, length asc, variant index asc): the winner depends neither on the order
   // in which variants finished nor on their positions in `pick`.
   auto better = [&](std::size_t i, std::size_t j) {
@@ -8168,6 +8469,10 @@ PortfolioResult route_portfolio(const model::Board& board, const model::DesignRu
   }
   const auto t_start = std::chrono::steady_clock::now();
   bool rounds_timed_out = false;  // the time limit ended the rounds (reported as RouteResult::time_limited)
+  bool es_stopped = false;        // sibling early-stop fired in the latest round (issue #20)
+  int es_cancelled = 0;
+  double es_saved_s = 0;
+  long es_saved_work = 0;
   for (int round = 0; round < rounds; ++round) {
     if (round > 0 && base.round_work > 0 &&
         std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count() > base.time_limit_s) {
@@ -8182,7 +8487,11 @@ PortfolioResult route_portfolio(const model::Board& board, const model::DesignRu
         v.o.warm_tracks.clear();  // copper of --warm-pcb is only the first round's start; later rounds continue from the best state
         v.o.warm_vias.clear();
         v.o.sink = nullptr;
-        v.o.deadline = nullptr;
+        // The shared early-stop deadline is cleared from round 1 on (later rounds continue from the
+        // best state, bounded by their round budgets, not by siblings) -- but not on a resumed run's
+        // first round: clearing it there silently disabled even a forced --early-stop for exactly
+        // the warm/state-in runs, unlike the standard path, which never clears it.
+        if (round > 0) v.o.deadline = nullptr;
       }
     const model::DesignRules& round_rules = stage < ramp_rules.size() ? ramp_rules[stage] : rules;
     last_relaxed = stage < ramp_rules.size();
@@ -8204,6 +8513,27 @@ PortfolioResult route_portfolio(const model::Board& board, const model::DesignRu
       });
     for (auto& t : pool) t.join();
     add_work();
+    {  // Sibling early-stop (issue #20): a variant completed this round and the deadline cut
+       // siblings short. Captured per round so the legalising round (no deadline) cannot erase it.
+      bool any_complete = false;
+      int canc = 0;
+      double ss = 0;
+      long sw = 0;
+      for (std::size_t i = 0; i < rs.size(); ++i) {
+        if (rs[i].connections > 0 && rs[i].routed == rs[i].connections) any_complete = true;
+        if (rs[i].deadline_stopped) {
+          ++canc;
+          ss += std::max(0.0, vs[i].o.time_limit_s - rs[i].seconds);
+          sw += std::max(0L, vs[i].o.work_budget - static_cast<long>(rs[i].expansions));
+        }
+      }
+      if (any_complete && canc > 0) {
+        es_stopped = true;
+        es_cancelled = canc;
+        es_saved_s = ss;
+        es_saved_work = sw;
+      }
+    }
     fresh_start = false;
     {
       std::size_t bi = 0;
@@ -8288,7 +8618,7 @@ PortfolioResult route_portfolio(const model::Board& board, const model::DesignRu
   if (!ramp_rules.empty() && last_relaxed) {
     // Out of time or rounds while relaxed: one round with next to no budget under the board's rules keeps what is legal.
     // Its zero time limit stops it at once by design, so only the rounds before it can say the clock ended the search.
-    for (const auto& r : rs) rounds_timed_out = rounds_timed_out || r.time_limited;
+    for (const auto& r : rs) rounds_timed_out = rounds_timed_out || (r.time_limited && !r.deadline_stopped);
     for (auto& v : vs) {
       v.o.warm = &warm_routes;
       v.o.sink = nullptr;
@@ -8309,6 +8639,7 @@ PortfolioResult route_portfolio(const model::Board& board, const model::DesignRu
     for (const auto& c : warm_routes) relaxed_routed.insert({c.pad_a, c.pad_b});
     for (auto& r : rs) {
       r.time_limited = false;
+      r.deadline_stopped = false;
       for (std::size_t k = 0; k < r.unrouted.size(); ++k) {
         auto& u = r.unrouted[k];
         if (!u.why.empty()) continue;
@@ -8340,13 +8671,27 @@ PortfolioResult route_portfolio(const model::Board& board, const model::DesignRu
     for (auto& m : bufs[best]->msgs) base.sink->publish(std::move(m));
   // Any variant stopped by time, not work, could have beaten the winner on a faster machine: the result depends on machine speed.
   bool timed = rounds_timed_out;
-  for (const auto& r : rs) timed = timed || r.time_limited;
+  for (const auto& r : rs) timed = timed || (r.time_limited && !r.deadline_stopped);  // a sibling cancelled by the early-stop deadline did not end this result by time
   pr.best = std::move(rs[best]);
   if (best_final_routed > pr.best.routed) pr.best = std::move(best_final);  // breathing ended relaxed or worse: the best legal one
   if (warm_floor_routed > pr.best.routed) pr.best = std::move(warm_floor);  // the ramp lost routes of the warm start: return the warm start
   pr.best.time_limited = timed;
   pr.best.work = work_sum[best];  // the kept result's variant over every round (one round: its own work, as before)
   pr.best.expansions = expansions_sum[best];
+  pr.stopped_early = es_stopped;
+  pr.cancelled = es_cancelled;
+  pr.saved_s = base.work_budget > 0 || base.round_work > 0 ? 0 : es_saved_s;  // report the saving in the currency the run was bounded by
+  pr.saved_work = base.work_budget > 0 || base.round_work > 0 ? es_saved_work : 0;
+  // What stopped the rounds (issue #21): nothing to report when the board completed -- the
+  // routed count already says so. The wall clock outranks the budgets it interrupted; an
+  // explicit --rounds cap outranks the per-round work budget it counted out; anything else
+  // ended on work (each round's variants stopped on their round work budget, the default
+  // included, or a plain job's --work split across rounds).
+  if (pr.best.routed < pr.best.connections) {
+    if (timed) pr.stopped_by = "time";  // any variant the clock stopped, not only a between-rounds timeout: a plain --time run has no rounds to time out between
+    else if (rounds_given) pr.stopped_by = "rounds";
+    else pr.stopped_by = "work";
+  }
   return pr;
 }
 

@@ -100,7 +100,15 @@ int field_cpu(const FieldProblem& p, std::vector<std::int32_t>& out) {
   if (w <= 0 || h <= 0 || L <= 0) return 1;
   static const int dirs[8][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}, {1, 1}, {-1, -1}, {1, -1}, {-1, 1}};
   const auto H = static_cast<std::size_t>(h);
-  std::vector<std::int64_t> changed_at(static_cast<std::size_t>(L) * H, 0);    // tick of the row's last change (0: the targets)
+  // Change-tracking init (Stage 2B step 8): only rows holding a target start marked changed
+  // (tick 0); every other row starts at -1, so the first round sweeps just the target rows
+  // and whatever their propagation reaches, instead of every row on every layer. A row can
+  // only gain a finite value from a target row, its own changed cells, or the via step, and
+  // each of those marks the row when it writes it, so no improving sweep is ever skipped:
+  // the field and the round count stay the reference's (tests/test_gpu.cpp).
+  std::vector<std::int64_t> changed_at(static_cast<std::size_t>(L) * H, -1);   // tick of the row's last change (0: rows with targets)
+  for (std::size_t i = 0; i < out.size(); ++i)
+    if (p.target[i]) changed_at[(i / n) * H + (i % n) / static_cast<std::size_t>(w)] = 0;
   std::vector<std::int64_t> swept_at(static_cast<std::size_t>(L) * 8 * H, -1);  // tick at which (layer, direction) last processed it
   std::vector<std::int64_t> via_at(H, -1);                                     // tick at which the via step last processed the row
   std::vector<std::int32_t> best(static_cast<std::size_t>(w));

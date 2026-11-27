@@ -20,16 +20,25 @@ struct RouteJob {
   std::string out;                // output .kicad_pcb; empty = do not write a board
   route::RouterOptions opt;       // `sink` is set here when viewing or recording
   int threads = 8;                // worker threads for the portfolio variants
+  bool external_cap = false;      // route-batch (issue #22): the caller owns the process-wide thread cap for the whole batch; the job must not re-scope it
   // Portfolio size (1 = single router). 0 = automatic: all variants (route::portfolio_size()) with a work budget,
   // so the output does not depend on `threads` (D47); otherwise `threads` (wall-clock mode: one variant per thread).
   int variants = 0;
   std::string kb_path;            // knowledge base file; empty = none
+  bool seed_given = false;        // --seed was passed explicitly: the run is under the deterministic contract
+  bool kb_given = false;          // --kb was passed explicitly: the knowledge base may be used even under --seed
+  bool time_given = false;        // --time was passed explicitly: the wall clock may stop a work-budgeted job (issue #16)
+  bool deterministic_mode = false;  // --deterministic (issue #17): seed in effect, KB off unless --kb, no sibling early-stop, a work budget required; the summary asserts the outcome
+  bool early_stop = false;        // --early-stop: cancel sibling variants once one fully routes, also under --work (issue #20)
+  bool no_early_stop = false;     // --no-early-stop: never cancel siblings (measurement runs)
   std::string items_out;          // --emit-items file; empty = none
   std::string json_out;           // --json summary file; empty = none
   // --report FILE (doc 18 D3, D136): a run report for designers, HTML (or Markdown for .md), rendered from the summary alone. It adds
   // the rules read and not read, the stuck report and a DRC of the board before and after to the summary, and writes the summary
   // to `json_out`, else beside the report as FILE.json, so every number in the report is a field of a file the reader has.
   std::string report_out;
+  std::string heartbeat_out;  // --heartbeat FILE (Tier 1): a JSON progress file (stage, routed, open, elapsed) rewritten while the job runs
+  double heartbeat_s = 10;    // --heartbeat-s: the rewrite interval, seconds
   nlohmann::json options_given;   // the options as given on the command line and in --config, [{"name", "value"}]; reported only
   bool view = false;              // stream to the browser viewer
   // Reference-return audit of selected nets on the routed board (issue #7, doc 05 §42): off unless a selector is given. Read-only; the
@@ -76,12 +85,19 @@ struct RouteJob {
   // --reroute: remove every unlocked track and via first and route the whole board again (locked copper, arcs and
   // zones stay; rule 6).
   bool reroute = false;
+  // Bystander-safe scoped reroute (Tier 1): strip only the in-scope copper and re-route it;
+  // every other net's copper is fixed for the run and its opens are left alone.
+  // reroute_nets takes net patterns (as --only-net); reroute_window takes "x1,y1,x2,y2" in
+  // board mm and scopes to the nets with a pad inside the window. The two combine as a union.
+  std::vector<std::string> reroute_nets;
+  std::string reroute_window;
   // --repair (issue #56, doc 05 §75, D172): connections still open at the end are tried again with the unlocked copper near them
   // lifted (a window that grows on each failure) and routed again; an attempt is kept only if nothing that was joined comes apart
   // and fewer connections are open. "auto" (default): only on a board that came with unlocked tracks or vias (a partly routed
   // board, whose copper the plain run cannot move); "on": also on a board routed from nothing here; "off".
   std::string repair = "auto";
   passes::RepairOptions repair_opt;
+  bool route_open_only = false;  // --route-open-only (Tier 1): finisher mode for a partially routed board -- routed copper stays fixed, the repair windows attack the open connections in focused form with a per-connection budget
   // Copper that joins no pad after the run, and is the run's doing, is taken off (passes::padless_islands, D198). true keeps it.
   bool keep_islands = false;
   // --only-net / --skip-net patterns (KiCad wildcards or regular expressions, as net-class patterns): only_nets keeps the nets that

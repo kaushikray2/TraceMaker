@@ -67,6 +67,8 @@ struct RepairResult {
   std::vector<RepairStep> steps;
   long work = 0;
   double seconds = 0;
+  bool time_stopped = false;  // a wall-clock limit (the loop's own, or an attempt router's) ended the attempts: which attempts ran depended on machine speed
+  bool stopped_early = false;  // an attempt's portfolio fired the sibling early-stop (#20): a deadline, not the attempt's own budget, ended a sibling -- the job is not deterministic
   nlohmann::json summary() const;
 };
 

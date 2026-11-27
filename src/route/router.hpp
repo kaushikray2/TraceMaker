@@ -39,6 +39,7 @@ struct RouterOptions {
   // `threads` variants would have used. Runs restart from scratch at each rung (a router run cannot be resumed).
   bool halving = false;
   long work_budget = 0;         // deterministic budget in search expansions (0 = none): same input + seed => same output
+  int early_stop = 0;           // sibling early-stop (issue #20): 0 = auto (wall-clock runs only), 1 = on, -1 = off
   // Per search attempt. One variant at a fixed budget prefers 1M (10 hard boards: 3M / 2M / 1M / 750k / 500k routed
   // 8,285 / 8,309 / 8,381 / 8,371 / 8,363), but the 8-variant 120 s tiers did not confirm it (tier B 5,167 -> 5,161,
   // tier C 9,523 -> 9,512 and 63.3 % -> 60.0 % clean), so it stays 3M (doc 05 §13; --max-expansions to experiment).
@@ -457,6 +458,7 @@ struct RouteResult {
   };
   std::vector<Unrouted> unrouted;
   bool time_limited = false;  // the wall-clock limit (--time), not the work budget, ended a search: the result depends on machine speed
+  bool deadline_stopped = false;  // a completed sibling shared deadline, not this search own limit, ended it (issue #20)
   long cache_evictions = 0;   // obstacle caches freed to stay under RouterOptions::class_cache_mb
   int obstacle_caches = 0;    // fixed-obstacle caches the router made (one per set of class values, track width and via size)
 };
@@ -479,6 +481,15 @@ struct PortfolioResult {
   std::vector<int> routed;             // routed count per variant
   std::vector<double> seconds;         // wall time per variant (its own clock)
   std::vector<WorkProfile> work;       // work profile per variant, over every round
+  // Sibling early-stop (issue #20): a variant completed and the shared deadline cancelled the rest.
+  bool stopped_early = false;
+  int cancelled = 0;    // variants the deadline cut short in the deciding round
+  double saved_s = 0;   // wall-budget seconds the cancelled variants did not spend (wall-clock runs)
+  long saved_work = 0;  // work units the cancelled variants did not spend (work-budget runs)
+  // Rounds budget report (issue #21): when the rounds path ended without completing the board,
+  // what stopped it -- "rounds" (the --rounds cap), "work" (the round work budget) or "time"
+  // (the wall clock). Empty when the board completed or no rounds ran.
+  std::string stopped_by;
   // Clearance ramp (relax): per relaxed stage that ran, how much the clearance was lowered and the most connections a round of it
   // routed (under the lowered clearance, so not legal yet).
   std::vector<std::pair<Coord, int>> ramp_stages;

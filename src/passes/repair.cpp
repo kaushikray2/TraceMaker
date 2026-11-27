@@ -271,6 +271,7 @@ nlohmann::json RepairResult::summary() const {
   for (const auto& s : steps) kept += s.kept;
   nlohmann::json j = {{"open_before", open_before}, {"open_after", open_after}, {"attempts", steps.size()}, {"kept", kept},
                       {"lifted_tracks", ripped_tracks.size()}, {"lifted_vias", ripped_vias.size()}, {"work", work}, {"seconds", seconds}, {"steps", st}};
+  if (time_stopped) j["time_limited"] = true;  // a wall-clock stop chose which attempts ran: not a deterministic result
   if (route_mode) j["no_bare_route"] = no_bare_route;  // a run with the end windows only writes the summary it always did
   return j;
 }
@@ -321,7 +322,10 @@ RepairResult repair_open(const model::Board& base, const model::DesignRules& rul
     for (std::size_t ui = 0; ui < out.unrouted.size(); ++ui) {
       const route::RouteResult::Unrouted u = out.unrouted[ui];  // a copy: a kept attempt replaces the list
       if (conns_tried >= ro.max_conns) break;
-      if (ro.time_limit_s > 0 && std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() > ro.time_limit_s) break;
+      if (ro.time_limit_s > 0 && std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() > ro.time_limit_s) {
+        out.time_stopped = true;
+        break;
+      }
       if (u.pad_a < 0 || !tried.insert({u.pad_a, u.pad_b}).second) continue;
       ++conns_tried;
       const NetId own = base.pads[static_cast<std::size_t>(u.pad_a)].net;
@@ -367,6 +371,7 @@ RepairResult repair_open(const model::Board& base, const model::DesignRules& rul
         for (const auto& n : base.nets)
           if (n.id > 0 && n.id != own && !n.name.empty() && std::find(o.skip_nets.begin(), o.skip_nets.end(), n.name) == o.skip_nets.end()) o.skip_nets.push_back(n.name);
         const route::RouteResult r = route::Router(bare, rules, o).run();
+        if (r.time_limited) out.time_stopped = true;
         out.work += r.expansions;
         auto open_of_net = [&](const std::vector<route::RouteResult::Unrouted>& us) {
           return std::count_if(us.begin(), us.end(), [&](const auto& x) { return x.net == u.net; });
@@ -470,11 +475,13 @@ RepairResult repair_open(const model::Board& base, const model::DesignRules& rul
         if (ro.variants > 1) {
           auto pr = route::route_portfolio(step, rules, o, ro.variants, {}, ro.threads);
           for (const auto& w : pr.work) st.work += w.total().expansions;
+          if (pr.stopped_early) out.stopped_early = true;
           r = std::move(pr.best);
         } else {
           r = route::Router(step, rules, o).run();
           st.work = r.expansions;
         }
+        if (r.time_limited) out.time_stopped = true;
         out.work += st.work;
         model::Board after = step;
         after.tracks.insert(after.tracks.end(), r.tracks.begin(), r.tracks.end());

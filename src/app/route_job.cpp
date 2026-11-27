@@ -8,6 +8,7 @@
 #include <bit>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdarg>
 #include <cstdio>
 #include <ctime>
@@ -25,6 +26,10 @@
 
 #include "advice/advice.hpp"
 #include "analysis/escape_proof.hpp"
+#if defined(__linux__) || defined(__APPLE__)
+#include <sys/resource.h>  // getrusage: the route JSON peak RSS (Stage 2B #18)
+#endif
+#include "core/parallel.hpp"
 #include "analysis/return_path.hpp"
 #include "advice/advisor.hpp"
 #include "advice/stuck_report.hpp"
@@ -40,6 +45,7 @@
 #include "drc/refill.hpp"
 #include "drc/rule_engine.hpp"
 #include "geom/clip.hpp"
+#include "geom/shape.hpp"
 #include "route/diff_pair.hpp"
 #include "route/layer_limits.hpp"
 #include "gpu/device.hpp"
@@ -240,30 +246,156 @@ int default_gpu_device(bool use_gpu) {
   return devs.empty() ? -1 : devs.front().index;
 }
 
+// Peak resident set size of this process so far, in MiB (Stage 2B #18): the route JSON's memory
+// headline next to its per-stage times. ru_maxrss is KiB on Linux, bytes on macOS; 0 elsewhere.
+static double peak_rss_mb() {
+#if defined(__linux__) || defined(__APPLE__)
+  struct rusage ru {};
+  if (getrusage(RUSAGE_SELF, &ru) != 0) return 0;
+#if defined(__APPLE__)
+  return static_cast<double>(ru.ru_maxrss) / (1024.0 * 1024.0);
+#else
+  return static_cast<double>(ru.ru_maxrss) / 1024.0;
+#endif
+#else
+  return 0;
+#endif
+}
+
 RouteJobResult run_route_job(RouteJob job) {
   const auto t_job = std::chrono::steady_clock::now();
+  // Stage 2B #18: per-stage wall times for the route JSON's `stages` block, marked at the job's section
+  // boundaries below. Escape analysis and legalise are not job stages in this engine: per-connection pad
+  // escape and the relax rounds' legalise step are route_portfolio's work, so their time sits in `search`.
+  double parse_s = 0, search_s = 0, repair_s = 0, refill_s = 0, save_s = 0;
+  // Stage 2B #19: this job's threads value is the process-wide worker cap, for this job's scope only.
+  // A batch job (issue #22) leaves the cap to the batch, which sets it once for all its jobs.
+  std::optional<parallel::CapScope> cap_scope;
+  if (!job.external_cap) cap_scope.emplace(std::max(1, job.threads));
+  bool stopped_early = false;  // issue #20: aggregated over the main run and every challenger below
+  std::string stopped_by;      // issue #21: what stopped the rounds stage of the run whose result stands
+  int es_cancelled = 0;
+  double es_saved_s = 0;
+  long es_saved_work = 0;
   auto log = [&](const std::string& line) {
     live::log(line);
     if (job.log) job.log(line);
   };
   auto& opt = job.opt;
+  opt.early_stop = job.no_early_stop ? -1 : job.early_stop ? 1 : 0;  // issue #20: resolved once for every run of this job
+  // --deterministic (issue #17): the contract as one switch, resolved here so route jobs get it too, not only
+  // the CLI. The seed is in effect whether or not --seed was typed (RouterOptions::seed defaults to the fixed 1
+  // the summary reports); what the mode adds is the given-ness, which is what isolates the run from the
+  // knowledge base below. A sibling early-stop makes the winner depend on thread timing, so it is off in this
+  // mode whatever the job asked for.
+  if (job.deterministic_mode) {
+    job.seed_given = true;
+    opt.early_stop = -1;
+  }
   // --time-total (D186): one deadline for the job. `cap` gives a stage at most what is left of it.
   const auto job_t0 = std::chrono::steady_clock::now();
   auto total_left = [&] { return job.time_total_s - std::chrono::duration<double>(std::chrono::steady_clock::now() - job_t0).count(); };
   auto cap = [&](double s) { return job.time_total_s > 0 ? std::min(s, total_left()) : s; };
   constexpr double kMinStage = 1.0;  // seconds: a stage with less than this left is skipped
   if (job.time_total_s < 0) throw std::invalid_argument("--time-total: expected seconds (> 0), or 0 for off");
+  if (!job.heartbeat_out.empty() && !(job.heartbeat_s > 0)) throw std::invalid_argument("--heartbeat-s: expected seconds (> 0)");
+  if (job.route_open_only && job.repair == "off")
+    throw std::invalid_argument("--route-open-only is the repair-driven finisher: it cannot combine with --repair off");
+  if ((!job.reroute_nets.empty() || !job.reroute_window.empty()) && job.reroute)
+    throw std::invalid_argument("--reroute strips every unlocked track and via; --reroute-net / --reroute-window scope that strip -- give one or the other");
+  if ((!job.reroute_nets.empty() || !job.reroute_window.empty()) && job.route_open_only)
+    throw std::invalid_argument("--route-open-only finishes a board as it stands; it does not combine with --reroute-net / --reroute-window");
   if (!(job.rescue_share > 0 && job.rescue_share <= 1)) throw std::invalid_argument("--rescue-share: expected a fraction in (0, 1]");
   if (job.time_total_s > 0) opt.time_limit_s = job.time_total_s * (job.rescue && !opt.relax ? job.rescue_share : 1.0);
+  // Whole-job determinism (issue #16): a work-budgeted job with no explicit --time and no
+  // --time-total must not stop on the wall clock anywhere -- not in the main run and not in
+  // any post-route stage, and every stage derives its time budget from opt.time_limit_s
+  // (the rescue passes inherit it, repair takes it as its attempt gate, the refill and
+  // thermal repairs spend what is left of it). Disarm it once, here: the limit becomes a
+  // sentinel no real run reaches, work decides every stop, and an explicit --time (or
+  // --time-total, above) stays the safety net whose bite still reports time_limited.
+  constexpr double kNoTimeLimit = 1e9;  // seconds; JSON-safe and safe under every share/scale applied to it
+  // What bounds this job: a plain job is bounded by --work (every variant run carries it,
+  // and the rescue passes derive their rounds from it). A --relax job's rounds are NOT
+  // bounded by --work (they run until complete, the round cap or --time); they are bounded
+  // only when a round budget was supplied -- --round-work or --rounds at this level, whose
+  // RouterOptions defaults are 0 (the 20 M / 200 defaults route_portfolio applies to its
+  // own copy do not count: with no round budget supplied, --relax stays time-bounded as
+  // before, issue #21). --round-work alone also bounds a plain job (route_portfolio gives
+  // every variant that work budget).
+  const bool work_bounded = opt.relax ? (opt.round_work > 0 || opt.rounds > 0)
+                                       : (opt.work_budget > 0 || opt.round_work > 0);
+  // --deterministic refuses the configurations that cannot honour it (issue #17): no work budget means the
+  // wall clock bounds the run, and halving sizes its rungs by the thread count. An explicit --time beside a
+  // work budget stays allowed as a safety net; if it ever binds, the summary's assertion below reports the
+  // violation instead of promising repeatability.
+  if (job.deterministic_mode && !work_bounded)
+    throw std::invalid_argument("--deterministic needs a work budget (--work, --round-work, or --rounds with --relax): a run bounded by the wall clock cannot promise a repeatable result");
+  if (job.deterministic_mode && opt.halving)
+    throw std::invalid_argument("--deterministic cannot combine with --halving: its rungs are sized by the thread count, so its result depends on --threads");
+  const bool time_disarmed = work_bounded && !job.time_given && job.time_total_s <= 0;
+  if (time_disarmed) opt.time_limit_s = kNoTimeLimit;
   // The live page (core/live.hpp): what this job is and where it is.
   live::field("board", job.in);
   if (!job.out.empty()) live::field("output", job.out);
   live::field("budget", (opt.work_budget > 0 ? fmt("%ld work, ", opt.work_budget) : std::string()) +
                             (job.time_total_s > 0 ? fmt("--time-total %.0f s (plain run %.0f s), ", job.time_total_s, opt.time_limit_s)
-                                                  : fmt("--time %.0f s, ", opt.time_limit_s)) +
+                                                  : time_disarmed ? std::string("--time off (work decides), ") : fmt("--time %.0f s, ", opt.time_limit_s)) +
                             fmt("%d thread%s", job.threads, job.threads == 1 ? "" : "s") + (opt.relax ? ", relax" : ""));
   if (job.view) live::field("viewer port", std::to_string(job.view_port));
   live::field("stage", "reading the board");
+  // Progress heartbeat (Tier 1): a JSON file a backend can poll while the job runs -- the stage, the
+  // furthest-along variant's routed count and the elapsed time, rewritten every --heartbeat-s seconds (temp
+  // file + rename, so a reader never sees half a file). Write-only like the live page: nothing reads it back,
+  // so it cannot change a result. The final state is written once, after the thread stops, at the end of the job.
+  struct Heartbeat {
+    std::string path;
+    std::chrono::steady_clock::time_point t0;
+    std::mutex mu;
+    std::condition_variable cv;
+    bool stop = false;
+    std::thread th;
+    ~Heartbeat() { halt(); }
+    void halt() {
+      {
+        std::lock_guard lk(mu);
+        stop = true;
+      }
+      cv.notify_all();
+      if (th.joinable()) th.join();
+    }
+    void write(const nlohmann::json& j) const {
+      const std::string tmp = path + ".tmp";
+      {
+        std::ofstream f(tmp);
+        f << j.dump(2);
+      }
+      std::error_code ec;
+      std::filesystem::rename(tmp, path, ec);
+    }
+    double elapsed() const { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(); }
+  };
+  Heartbeat hb;
+  if (!job.heartbeat_out.empty()) {
+    hb.path = job.heartbeat_out;
+    hb.t0 = job_t0;
+    hb.th = std::thread([&hb, &job] {
+      std::unique_lock lk(hb.mu);
+      while (!hb.cv.wait_for(lk, std::chrono::duration<double>(job.heartbeat_s), [&hb] { return hb.stop; })) {
+        lk.unlock();
+        const live::Progress p = live::progress();
+        nlohmann::json j{{"board", job.in}, {"elapsed_s", hb.elapsed()}};
+        if (!p.stage.empty()) j["stage"] = p.stage;
+        if (p.total >= 0) {
+          j["routed"] = p.routed;
+          j["connections"] = p.total;
+          j["open"] = p.total - p.routed;
+        }
+        hb.write(j);
+        lk.lock();
+      }
+    });
+  }
   auto lb = io::read_board_file(job.in);
   if (job.reroute) {
     // Strip the unlocked tracks and vias from the document and read it again (the editor changes the document,
@@ -282,10 +414,119 @@ RouteJobResult run_route_job(RouteJob job) {
     }
     log(fmt("reroute: %d unlocked tracks and vias removed", removed));
   }
+  // Bystander-safe scoped reroute (Tier 1). The scope is the union of the --reroute-net
+  // patterns and, for --reroute-window, the nets with a pad inside the window. The scope's
+  // unlocked copper is ripped (in window mode only where it meets the window); everything
+  // else is locked in the MODEL only -- the document keeps its original lock flags, so the
+  // written board is unchanged outside the scope -- and every out-of-scope net is skipped,
+  // so its pre-existing opens are not routed either. What stays of an in-scope net (locked
+  // copper; window-mode copper outside the window) is the fixed anchor the re-route must
+  // connect to: the ratsnest is computed from connectivity, so a boundary stub joins its
+  // pad's component and the open connection spans the boundary.
+  bool reroute_scoped = false;
+  std::vector<std::string> rerouted_names;
+  int ripped_tracks = 0, ripped_arcs = 0, ripped_vias = 0;
+  bool reroute_has_window = false;
+  double reroute_window_mm[4] = {0, 0, 0, 0};
+  if (!job.reroute_nets.empty() || !job.reroute_window.empty()) {
+    reroute_scoped = true;
+    const model::Board& bd = lb.board;
+    std::set<model::NetId> scope;
+    Coord wx1 = 0, wy1 = 0, wx2 = 0, wy2 = 0;
+    if (!job.reroute_window.empty()) {
+      double w[4] = {0, 0, 0, 0};
+      bool ok = !job.reroute_window.starts_with(",") && !job.reroute_window.ends_with(",") &&
+                job.reroute_window.find(",,") == std::string::npos;  // a trailing or doubled comma is malformed, not a fifth field
+      std::stringstream ss(job.reroute_window);
+      std::string tok;
+      int i = 0;
+      while (std::getline(ss, tok, ',')) {
+        if (i >= 4) { ok = false; break; }
+        try {
+          std::size_t used = 0;
+          w[i] = std::stod(tok, &used);
+          // The 1e6 mm bound keeps the llround conversion far inside int64: an absurd finite value (1e300) is finite but unconvertible.
+          if (used != tok.size() || !std::isfinite(w[i]) || std::abs(w[i]) > 1e6) ok = false;  // stod accepts nan and inf; both are malformed here
+        } catch (...) { ok = false; }
+        ++i;
+      }
+      if (!ok || i != 4) throw std::invalid_argument("--reroute-window takes X1,Y1,X2,Y2 in board mm, got '" + job.reroute_window + "'");
+      reroute_has_window = true;
+      for (int k = 0; k < 4; ++k) reroute_window_mm[k] = w[k];
+      wx1 = static_cast<Coord>(std::llround(std::min(w[0], w[2]) * 1e6));
+      wx2 = static_cast<Coord>(std::llround(std::max(w[0], w[2]) * 1e6));
+      wy1 = static_cast<Coord>(std::llround(std::min(w[1], w[3]) * 1e6));
+      wy2 = static_cast<Coord>(std::llround(std::max(w[1], w[3]) * 1e6));
+      for (const auto& pad : bd.pads)
+        if (pad.net > 0 && pad.pos.x >= wx1 && pad.pos.x <= wx2 && pad.pos.y >= wy1 && pad.pos.y <= wy2) scope.insert(pad.net);
+      if (scope.empty()) throw std::invalid_argument("--reroute-window covers no pad of any net on this board");
+    }
+    for (const auto& pat : job.reroute_nets) {
+      bool any = false;
+      for (const auto& n : bd.nets)
+        if (n.id > 0 && !n.name.empty() && (pat == n.name || model::pattern_match(pat, n.name))) { scope.insert(n.id); any = true; }
+      if (!any) log("warning: --reroute-net pattern '" + pat + "' matches no net of the board");
+    }
+    if (scope.empty()) throw std::invalid_argument("--reroute-net / --reroute-window selected no net on this board");
+    auto in_window = [&](model::Point q) { return !reroute_has_window || (q.x >= wx1 && q.x <= wx2 && q.y >= wy1 && q.y <= wy2); };
+    auto seg_hits = [&](model::Point a, model::Point b) {
+      if (!reroute_has_window || in_window(a) || in_window(b)) return true;
+      // geom::segments_intersect is exact (128-bit orientation) and closed: a segment through a
+      // window corner, ending on an edge, or running along a boundary all count as hits. The
+      // strict-inequality test this replaces missed every one of those, and its 64-bit cross
+      // products could overflow on board-scale coordinates.
+      const model::Point c1{wx1, wy1}, c2{wx2, wy1}, c3{wx2, wy2}, c4{wx1, wy2};
+      return geom::segments_intersect(a, b, c1, c2) || geom::segments_intersect(a, b, c2, c3) ||
+             geom::segments_intersect(a, b, c3, c4) || geom::segments_intersect(a, b, c4, c1);
+    };
+    auto rip = [&](auto& items, auto&& hits, int& count) {
+      for (std::size_t i = items.size(); i-- > 0;) {
+        auto& it = items[i];
+        if (it.locked || scope.count(it.net) == 0 || !hits(it)) continue;
+        if (it.node != sexpr::kNoNode) lb.doc.remove(it.node);
+        items.erase(items.begin() + static_cast<std::ptrdiff_t>(i));
+        ++count;
+      }
+    };
+    rip(lb.board.tracks, [&](const model::Track& tr) { return seg_hits(tr.a, tr.b); }, ripped_tracks);
+    rip(lb.board.arcs,
+        [&](const model::ArcTrack& tr) {
+          if (!reroute_has_window) return true;
+          const Coord hw = tr.width / 2;
+          return std::min({tr.a.x, tr.mid.x, tr.b.x}) - hw <= wx2 && std::max({tr.a.x, tr.mid.x, tr.b.x}) + hw >= wx1 &&
+                 std::min({tr.a.y, tr.mid.y, tr.b.y}) - hw <= wy2 && std::max({tr.a.y, tr.mid.y, tr.b.y}) + hw >= wy1;
+        },
+        ripped_arcs);
+    rip(lb.board.vias, [&](const model::Via& v) { return in_window(v.pos); }, ripped_vias);
+    for (auto& tr : lb.board.tracks) tr.locked = true;
+    for (auto& tr : lb.board.arcs) tr.locked = true;
+    for (auto& v : lb.board.vias) v.locked = true;
+    std::string names;
+    for (const auto& n : bd.nets) {
+      if (n.id <= 0 || n.name.empty()) continue;
+      if (scope.count(n.id)) {
+        rerouted_names.push_back(n.name);
+        names += (names.empty() ? "" : ", ") + n.name;
+      } else if (std::find(opt.skip_nets.begin(), opt.skip_nets.end(), n.name) == opt.skip_nets.end()) {
+        opt.skip_nets.push_back(n.name);
+      }
+    }
+    log(fmt("scoped reroute: ripped %d tracks, %d arcs, %d vias of %zu net(s) (%s); all other copper is fixed for this run", ripped_tracks,
+            ripped_arcs, ripped_vias, rerouted_names.size(), names.c_str()));
+  }
   // The document after edits, parsed again, so the model and the node ids match what will be written.
   auto reparse = [&] {
     lb.doc = sexpr::Document::parse(lb.doc.write());
     lb.board = io::read_board(lb.doc);
+    if (reroute_scoped) {
+      // The scoped rip locked every surviving item in the model only (the document keeps the
+      // original lock flags, so the output file preserves them). A fresh parse reads the
+      // document, so it would silently drop those locks and let later stages treat bystander
+      // copper as rippable; re-apply them.
+      for (auto& tr : lb.board.tracks) tr.locked = true;
+      for (auto& tr : lb.board.arcs) tr.locked = true;
+      for (auto& v : lb.board.vias) v.locked = true;
+    }
   };
   if (job.copper_layers > 0 && job.copper_layers != lb.board.copper_count()) {
     const int had = lb.board.copper_count();
@@ -465,11 +706,19 @@ RouteJobResult run_route_job(RouteJob job) {
       throw std::runtime_error(fmt("footprint check: %d error%s; fix the footprints, or route anyway with --footprint-warn-only", fr.errors, fr.errors == 1 ? "" : "s"));
   }
   // Knowledge base (failure memory T3): earlier failures on this board go first; variant choice by bandit.
+  // Under an explicit --seed the run must not depend on earlier runs: unless --kb was given too, the knowledge
+  // base is neither read nor written (its failed-connection priorities, variant bandit and failure records all
+  // carry one run's outcome into the next). Interactive runs without --seed keep the default behaviour.
   std::unique_ptr<learn::KnowledgeBase> kb;
-  if (!job.kb_path.empty()) {
+  const bool kb_suppressed = job.seed_given && !job.kb_given && !job.kb_path.empty();
+  if (kb_suppressed)
+    log("knowledge base: not used: --seed was given without --kb, so this run does not depend on earlier runs (give --kb to use the knowledge base, or --no-kb to silence this note)");
+  if (!job.kb_path.empty() && !kb_suppressed) {
     kb = std::make_unique<learn::KnowledgeBase>(job.kb_path);
     if (!kb->ok()) kb.reset();
   }
+  const bool kb_used = kb != nullptr;
+  bool stage_time_limited = false;  // a post-run stage (repair, refill, thermal repair) stopped on the wall clock
   int conn_estimate = 0;
   for (const auto& n : lb.board.nets) conn_estimate += !n.name.empty();
   const auto feat = learn::features_of(lb.board, lb.doc.text(), conn_estimate);
@@ -862,6 +1111,8 @@ RouteJobResult run_route_job(RouteJob job) {
   bool input_copper = false;  // the board came with unlocked tracks or vias (--repair auto)
   for (const auto& t : lb.board.tracks) input_copper = input_copper || !t.locked;
   for (const auto& v : lb.board.vias) input_copper = input_copper || !v.locked;
+  if (job.route_open_only && !input_copper)
+    log("route-open-only: the board has no routed copper: this run is a plain route, and the repair stage runs on its result");
   auto& res = out.result;
   // The after-route stages below may not undo the router's tuning (D173, issue #60): a stage's copper is kept only if no net is
   // further outside a `length` or `skew` rule with it than without it, measured as the DRC measures the written board.
@@ -879,6 +1130,8 @@ RouteJobResult run_route_job(RouteJob job) {
     return !length_rules || drc::length_faults_no_worse(length_faults_of(t0, v0), length_faults_of(t1, v1));
   };
   auto route_t0 = std::chrono::steady_clock::now();  // --time covers one routing run, the refill repair after it included
+  parse_s = std::chrono::duration<double>(route_t0 - t_job).count();
+  const auto t_search0 = route_t0;
   std::vector<int> ran;
   int best_index = 0;
   std::string best_name;
@@ -888,7 +1141,7 @@ RouteJobResult run_route_job(RouteJob job) {
   const int threads = std::max(1, job.threads);
   // An explicit --variants may go beyond the eight designed variants: the extras are seeded diversifications
   // (doc 16: on hard dense breakouts the winning variant is spread over the portfolio, so more seeds find more).
-  const int variants = std::clamp(job.variants > 0 ? job.variants : opt.work_budget > 0 ? route::portfolio_size() : threads, 1,
+  const int variants = std::clamp(job.variants > 0 ? job.variants : work_bounded ? route::portfolio_size() : threads, 1,
                                   job.variants > 0 ? 64 : route::portfolio_size());
   route::WorkProfile all_work;  // summed over the portfolio's variants (and over the advised runs)
 
@@ -924,6 +1177,11 @@ RouteJobResult run_route_job(RouteJob job) {
     std::string best_name;
     nlohmann::json rows = nlohmann::json::array();
     route::WorkProfile work;
+    bool stopped_early = false;  // a sibling completed and the rest were cancelled (issue #20)
+    int cancelled = 0;
+    double saved_s = 0;
+    long saved_work = 0;
+    std::string stopped_by;  // what stopped this run's rounds stage: rounds | work | time (issue #21)
     std::vector<std::pair<Coord, int>> ramp_stages;  // relaxed stages of the run: clearance lowered by, best count routed
     int unadvised_best = -1, advised_best = -1;  // routed counts of the best variant of each kind (-1: none ran)
   };
@@ -965,6 +1223,11 @@ RouteJobResult run_route_job(RouteJob job) {
       r.best_index = pr.indices[static_cast<std::size_t>(pr.best_variant)];
       r.best_name = pr.variants[static_cast<std::size_t>(pr.best_variant)];
       r.res = std::move(pr.best);
+      r.stopped_early = pr.stopped_early;
+      r.cancelled = pr.cancelled;
+      r.saved_s = pr.saved_s;
+      r.saved_work = pr.saved_work;
+      r.stopped_by = pr.stopped_by;
       r.ramp_stages = pr.ramp_stages;
       for (const auto& w : pr.work)
         for (int p = 0; p < route::kWorkPhases; ++p) r.work.phase[static_cast<std::size_t>(p)] += w.phase[static_cast<std::size_t>(p)];
@@ -978,6 +1241,11 @@ RouteJobResult run_route_job(RouteJob job) {
   };
   {
     Run first = run_once(opt, 0, true);
+    stopped_early = first.stopped_early;
+    es_cancelled = first.cancelled;
+    es_saved_s = first.saved_s;
+    es_saved_work = first.saved_work;
+    stopped_by = first.stopped_by;
     res = std::move(first.res);
     ran = std::move(first.ran);
     best_index = first.best_index;
@@ -1016,6 +1284,7 @@ RouteJobResult run_route_job(RouteJob job) {
       if (job.time_total_s > 0) {  // the passes left share what is left of the job's time (D186)
         const double left = total_left();
         if (left < kMinStage) {
+          stage_time_limited = true;  // the stage was skipped on the wall clock, not on work
           log(fmt("rescue: skipped, --time-total (%.0f s) is used up", job.time_total_s));
           break;
         }
@@ -1042,6 +1311,13 @@ RouteJobResult run_route_job(RouteJob job) {
       if (warm || passes.size() == 1) live::field("first pass", fmt("%d of %d routed", routed_before, res.connections));
       live_stage = fmt("rescue (%s): ", mode);
       Run next = run_once(o2, 0, false);
+      if (next.res.time_limited) stage_time_limited = true;  // adopted or not: a time-stopped challenger shapes the outcome
+      if (next.stopped_early) {
+        stopped_early = true;
+        es_cancelled += next.cancelled;
+        es_saved_s += next.saved_s;
+        es_saved_work += next.saved_work;
+      }
       const double pass_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - route_t0).count();  // a relax result's own clock is its last round's
       rescue_s += pass_s;
       for (int p = 0; p < route::kWorkPhases; ++p) all_work.phase[static_cast<std::size_t>(p)] += next.work.phase[static_cast<std::size_t>(p)];
@@ -1059,6 +1335,7 @@ RouteJobResult run_route_job(RouteJob job) {
       }
       if (better) {
         best_from_rescue = true;
+        stopped_by = next.stopped_by;
         res = std::move(next.res);
         ran = std::move(next.ran);
         best_index = next.best_index;
@@ -1153,6 +1430,7 @@ RouteJobResult run_route_job(RouteJob job) {
       o2.sink = nullptr;
       if (job.time_total_s > 0) {
         if (total_left() < kMinStage) {
+          stage_time_limited = true;  // the round was skipped on the wall clock, not on work
           stop(fmt("--time-total (%.0f s) is used up", job.time_total_s));
           break;
         }
@@ -1161,6 +1439,13 @@ RouteJobResult run_route_job(RouteJob job) {
       route_t0 = std::chrono::steady_clock::now();
       live_stage = fmt("advisor round %d: ", round);
       Run next = run_once(o2, round, false);
+      if (next.res.time_limited) stage_time_limited = true;  // adopted or not: a time-stopped challenger shapes the outcome
+      if (next.stopped_early) {
+        stopped_early = true;
+        es_cancelled += next.cancelled;
+        es_saved_s += next.saved_s;
+        es_saved_work += next.saved_work;
+      }
       for (int p = 0; p < route::kWorkPhases; ++p) all_work.phase[static_cast<std::size_t>(p)] += next.work.phase[static_cast<std::size_t>(p)];
       const bool adopt = route::route_result_better(next.res, res);
       rj["routed_after"] = next.res.routed;
@@ -1173,6 +1458,7 @@ RouteJobResult run_route_job(RouteJob job) {
       previous["routed_after"] = next.res.routed;
       previous["routed_before"] = res.routed;
       if (adopt) {
+        stopped_by = next.stopped_by;
         res = std::move(next.res);
         ran = std::move(next.ran);
         best_index = next.best_index;
@@ -1196,18 +1482,33 @@ RouteJobResult run_route_job(RouteJob job) {
     for (const auto& u : res.unrouted) failed.push_back({u.net, u.a, u.b, 1});
     kb->record_failures(feat.hash, failed);
   }
+  const auto t_repair0 = std::chrono::steady_clock::now();
+  search_s = std::chrono::duration<double>(t_repair0 - t_search0).count();
   // Repair windows (issue #56, doc 05 §75, D172): connections still open are tried again with the unlocked copper near them lifted.
   nlohmann::json repair_summary;
   std::optional<model::Board> board_before_repair;  // the input as read, for the report's DRC "before" when the repair lifted some of it
   nlohmann::json removed_items;                      // the input's tracks and vias the repair lifted, in the --emit-items layout
   route::RouteResult gone_input;                     // the same copper as items
   int islands_cut = 0;                               // groups of copper that joined no pad after the run, taken off (D198)
-  if (job.repair != "off" && (job.repair == "on" || input_copper) && res.routed < res.connections && job.time_total_s > 0 && total_left() < kMinStage)
+  if (job.repair != "off" && (job.repair == "on" || job.route_open_only || input_copper) && res.routed < res.connections && job.time_total_s > 0 && total_left() < kMinStage) {
+    stage_time_limited = true;  // skipped on the wall clock, like every other stage's --time-total skip
     log(fmt("repair: skipped, --time-total (%.0f s) is used up", job.time_total_s));
-  else if (job.repair != "off" && (job.repair == "on" || input_copper) && res.routed < res.connections) {
+  }
+  else if (job.repair != "off" && (job.repair == "on" || job.route_open_only || input_copper) && res.routed < res.connections) {
     live::field("stage", "repair windows");
     if (opt.sink) opt.sink->publish(server::stage("repair", "begin", fmt("%d connections open", res.connections - res.routed)));
     passes::RepairOptions ro = job.repair_opt;
+    if (job.route_open_only) {
+      // The finisher's configuration (Tier 1): an attempt routes only the open connection and the nets whose
+      // copper it lifted (focus), over every open connection, with a per-connection budget -- the job's
+      // --work when given, else four times the repair default when the attempt budget was not set either --
+      // and portfolio attempts when the job runs variants.
+      ro.focus = true;
+      if (opt.work_budget > 0) ro.step_work = std::max(ro.step_work, opt.work_budget);
+      else if (ro.step_work == passes::RepairOptions{}.step_work) ro.step_work *= 4;
+      ro.max_conns = std::max(ro.max_conns, res.connections - res.routed);
+      if (variants > 1) ro.variants = std::max(ro.variants, variants);
+    }
     for (const auto& [a, b2] : opt.pair_nets) ro.keep_nets.push_back(a), ro.keep_nets.push_back(b2);
     if (opt.diff_pairs) {
       const drc::RuleEngine re(*route_board, rules);
@@ -1222,8 +1523,10 @@ RouteJobResult run_route_job(RouteJob job) {
               for (const double x : ro.radii_mm) r += (r.empty() ? "" : ", ") + fmt("%g", x);
               return r;
             }().c_str(), ro.step_work));
-    ro.threads = job.threads;
+    ro.threads = threads;  // the clamped local (max(1, job.threads)): a raw 0 would read as "all variants" inside repair and slip the cap
     const auto rep = passes::repair_open(*route_board, rules, res, opt, ro, log);
+    if (rep.time_stopped) stage_time_limited = true;
+    if (rep.stopped_early) stopped_early = true;  // an attempt's portfolio fired the sibling early-stop: not deterministic
     all_work.phase[static_cast<std::size_t>(route::WorkPhase::Cleanup)].expansions += rep.work;
     repair_summary = rep.summary();
     if (rep.changed) {
@@ -1299,6 +1602,8 @@ RouteJobResult run_route_job(RouteJob job) {
   // Soft zones (doc 05 §36): the router cut through stale fills and trusted them for connectivity. Refill them for
   // the new copper as KiCad will, count what is still unconnected, and route those connections again with the
   // refilled fills as fixed copper (pass 2, its own budget equal to the first pass's).
+  repair_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_repair0).count();
+  const auto t_refill0 = std::chrono::steady_clock::now();
   nlohmann::json refill_summary;
   int unconnected_after_refill = -1;
   if (opt.soft_zones) {
@@ -1324,13 +1629,17 @@ RouteJobResult run_route_job(RouteJob job) {
     unconnected_after_refill = before;
     // The repair has the first pass's work budget but only what is left of the time limit (rule 5).
     const double time_left = cap(opt.time_limit_s - std::chrono::duration<double>(std::chrono::steady_clock::now() - route_t0).count());
-    if (before > 0 && job.refill_repair && time_left <= 0) log("refill repair: skipped, the time limit is used up");
+    if (before > 0 && job.refill_repair && time_left <= 0) {
+      stage_time_limited = true;  // the stage was skipped on the wall clock, not on work
+      log("refill repair: skipped, the time limit is used up");
+    }
     if (before > 0 && job.refill_repair && time_left > 0) {
       route::RouterOptions o2 = opt;
       o2.soft_zones = false;
       o2.sink = nullptr;
       o2.time_limit_s = time_left;
       const auto r2 = route::Router(rf.board, rules, o2).run();
+      if (r2.time_limited) stage_time_limited = true;
       log(fmt("refill repair: routed %d/%d connections, %zu tracks, %zu vias, %ld expansions", r2.routed, r2.connections, r2.tracks.size(),
               r2.vias.size(), r2.expansions));
       // The repair's copper changes the fills once more. It is kept only if the count after that refill is lower
@@ -1385,7 +1694,10 @@ RouteJobResult run_route_job(RouteJob job) {
       }
       log(fmt("thermal reliefs: %zu starved by the new copper (%s)", starved.size(), pads.c_str()));
       const double thermal_time = cap(opt.time_limit_s - std::chrono::duration<double>(std::chrono::steady_clock::now() - route_t0).count());
-      if (job.refill_repair && thermal_time <= 0) log("thermal repair: skipped, the time limit is used up");
+      if (job.refill_repair && thermal_time <= 0) {
+        stage_time_limited = true;  // the stage was skipped on the wall clock, not on work
+        log("thermal repair: skipped, the time limit is used up");
+      }
       if (job.refill_repair && thermal_time > 0) {
         const Coord clearance = std::max(rules.minimums.clearance, rules.classes.empty() ? Coord{0} : rules.default_class().clearance);
         auto touches = [](const std::vector<model::Zone>& ks, const geom::Shape& sh, model::LayerMask layers) {
@@ -1450,6 +1762,7 @@ RouteJobResult run_route_job(RouteJob job) {
         for (std::size_t i = 0; i < starved.size() && s_cur > 0; ++i) {
           const double left = cap(opt.time_limit_s - std::chrono::duration<double>(std::chrono::steady_clock::now() - route_t0).count());
           if (left <= 0) {
+            stage_time_limited = true;
             log("thermal repair: stopped, the time limit is used up");
             break;
           }
@@ -1472,6 +1785,7 @@ RouteJobResult run_route_job(RouteJob job) {
           for (const auto& n : route_board->nets)
             if (n.id > 0 && !rip.count(n.id)) o3.skip_nets.push_back(n.name);
           const auto r3 = route::Router(b3f, rules, o3).run();
+          if (r3.time_limited) stage_time_limited = true;
           add_copper(b3, r3);
           const model::Board judged = drc::refill_zones(b3, rules).board;
           auto st3 = starved_new(judged);
@@ -1510,6 +1824,7 @@ RouteJobResult run_route_job(RouteJob job) {
     }
     out.unconnected_after_refill = unconnected_after_refill;
   }
+  refill_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_refill0).count();
   // After-route passes (doc 05 §39). Each works on the routed copper as a transaction: its result is judged by
   // the number of unconnected items (after a refill when fills are soft or vias were added) and dropped if that
   // number went up.
@@ -1753,6 +2068,7 @@ RouteJobResult run_route_job(RouteJob job) {
                               {"area_mm2", std::round(area / 1e10) / 100.0}});
     }
   }
+  const auto t_save0 = std::chrono::steady_clock::now();
   if (!job.out.empty()) {
     live::field("stage", "writing the board");
     io::BoardEditor ed(lb, opt.seed);
@@ -1762,6 +2078,7 @@ RouteJobResult run_route_job(RouteJob job) {
     ed.save(job.out);
     copy_project_files(job.in, job.out);
   }
+  save_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_save0).count();
   // Reference-return audit (issue #7, doc 05 §42): the selected nets on the board as routed, fills redone for the new copper.
   nlohmann::json return_path_summary;
   {
@@ -1998,6 +2315,21 @@ RouteJobResult run_route_job(RouteJob job) {
                  {"escape_corridor_mm", res.escape_corridor_mm}, {"package_pin_edges", res.package_pin_edges}, {"line_crossings", res.line_crossings}, {"escape_reclaimed", res.escape_reclaimed},
                  {"bundle_groups", res.bundle_groups}, {"bundle_spines", res.bundle_spines}, {"bundle_conns", res.bundle_conns}, {"bundle_lanes", res.bundle_lanes}, {"tunnels", res.tunnels}};
   if (!variant_rows.empty()) out.summary["variants"] = std::move(variant_rows);
+  {  // Stage 2B #18: where the job's wall time went, plus the process peak RSS. `other` is the residual
+     // (after-route passes, analyses, report assembly), so the stages always sum to `seconds`.
+    const double other_s = std::max(0.0, job_seconds - (parse_s + search_s + repair_s + refill_s + save_s));
+    out.summary["stages"] = {{"parse", parse_s}, {"search", search_s}, {"repair", repair_s},
+                             {"refill", refill_s}, {"save", save_s},   {"other", other_s}};
+    out.summary["peak_rss_mb"] = peak_rss_mb();
+    out.summary["threads_effective"] = threads;  // Stage 2B #19: the worker cap in force for this job
+    out.summary["stopped_early"] = stopped_early;  // issue #20: a sibling completed and cancelled the rest
+    if (!stopped_by.empty()) out.summary["stopped_by"] = stopped_by;  // issue #21: what stopped the relax/rounds stage (rounds | work | time)
+    if (stopped_early) {
+      out.summary["early_stop_cancelled"] = es_cancelled;
+      out.summary["early_stop_saved_s"] = es_saved_s;
+      out.summary["early_stop_saved_work"] = es_saved_work;
+    }
+  }
   // M22 repair steps (D156), only when they ran: a run without them writes the summary it always did.
   for (const auto& [k, v] : {std::pair<const char*, long>{"via_shoves", res.via_shoves}, {"via_shove_trials", res.via_shove_trials}, {"window_escalations", res.window_escalations},
                              {"via_retried", res.via_retried}, {"fanout_holds", res.fanout_holds}, {"fanout_heads", res.fanout_heads}})
@@ -2082,12 +2414,69 @@ RouteJobResult run_route_job(RouteJob job) {
     for (const auto& [pins, done] : res.escape_rings) rings.push_back({{"pins", pins}, {"connected", done}});
     out.summary["escape_rings"] = rings;
   }
-  out.summary["time_limited"] = res.time_limited;
-  if (res.time_limited) log(fmt("warning: the time limit (%.0f s) ended the search before the work budget did: the result depends on machine speed", opt.time_limit_s));
+  out.summary["time_limited"] = res.time_limited || stage_time_limited;
+  out.summary["kb_used"] = kb_used;
+  // The deterministic contract (the plugin's Tier 1 ask): no knowledge-base influence, a work budget as the
+  // binding limit (--work, or --round-work: route_portfolio runs every round on it), no halving (its rungs are
+  // sized by the thread count), no stage stopped by the wall clock, and no sibling early-stop
+  // (its winner depends on thread timing).
+  // The seed needs no --seed flag to qualify: RouterOptions::seed defaults to a fixed 1, so a --work --no-kb run
+  // (the record_replay shape) is as repeatable as a seeded one. A run outside the contract may still repeat in
+  // practice; it is just not promised.
+  out.summary["deterministic"] = !kb_used && work_bounded && !opt.halving &&
+                                  !out.summary["time_limited"].get<bool>() && !stopped_early;
+  if (job.deterministic_mode) {
+    // The mode's assertion (issue #17): the flag promised repeatability, so a run that left the contract says
+    // so, with the reason, instead of a bare false a consumer has to diagnose. (Halving and a missing work
+    // budget are refused above; an early-stop cannot fire, the mode turns it off -- the knowledge base via an
+    // explicit --kb and a binding --time safety net are the reachable violations.)
+    out.summary["deterministic_mode"] = true;
+    if (!out.summary["deterministic"].get<bool>()) {
+      const std::string why =
+          kb_used ? "the knowledge base was used (--kb): what it has learned can differ between runs"
+                  : out.summary["time_limited"].get<bool>()
+                        ? "the time limit bound a stage (the --time safety net fired): the result depends on machine speed"
+                        : "the run left the deterministic contract";
+      out.summary["deterministic_violation"] = why;
+      log("warning: --deterministic: this run is not deterministic: " + why);
+    }
+  }
+  if (out.summary["time_limited"].get<bool>())
+    log(fmt("warning: the time limit (%.0f s) ended a stage before its work budget did: the result depends on machine speed", opt.time_limit_s));
   if (res.cache_evictions > 0)
     log(fmt("note: the obstacle caches reached --class-cache-mb (%.0f MB) and were freed %ld times; a larger bound saves time (and may change the result)",
             opt.class_cache_mb, res.cache_evictions));
   out.summary["open"] = res.connections - res.routed;
+  {
+    // Structured failures (Tier 1): every open connection as an object -- the net, the REF.PIN pair as
+    // fields and the router's stable reason code (RouteResult::Unrouted::reason, router.hpp) -- beside the
+    // human-readable failures strings, which stay for the log and the report. exit_code is the route
+    // command's process code for this job (0/3), for consumers that read only the file.
+    nlohmann::json open = nlohmann::json::array();
+    for (const auto& u : res.unrouted) {
+      auto end = [&](int pad) {
+        const auto& pd = lb.board.pads[static_cast<std::size_t>(pad)];
+        return nlohmann::json{{"part", lb.board.footprints[static_cast<std::size_t>(pd.footprint)].reference}, {"pad", pd.number}};
+      };
+      nlohmann::json e{{"net", u.net}, {"reason", u.reason}, {"from", end(u.pad_a)}};
+      e["to"] = u.pad_b < 0 ? nlohmann::json{{"zone", true}} : end(u.pad_b);
+      open.push_back(std::move(e));
+    }
+    out.summary["open_connections"] = std::move(open);
+    out.summary["exit_code"] = out.exit_code();
+    if (job.route_open_only) {
+      out.summary["route_open_only"] = true;
+      out.summary["open_at_start"] = res.connections;  // the input's ratsnest: connections is a property of the board as read, unchanged by the stages
+    }
+    if (reroute_scoped) {
+      nlohmann::json rr{{"ripped_tracks", ripped_tracks}, {"ripped_arcs", ripped_arcs}, {"ripped_vias", ripped_vias}};
+      nlohmann::json nets = nlohmann::json::array();
+      for (const auto& n : rerouted_names) nets.push_back(n);
+      rr["nets"] = std::move(nets);
+      if (reroute_has_window) rr["window_mm"] = {reroute_window_mm[0], reroute_window_mm[1], reroute_window_mm[2], reroute_window_mm[3]};
+      out.summary["rerouted"] = std::move(rr);
+    }
+  }
   out.summary["completion_pct"] = res.connections > 0 ? std::round(10000.0 * res.routed / res.connections) / 100.0 : 100.0;
   {
     std::time_t now = std::time(nullptr);
@@ -2154,6 +2543,16 @@ RouteJobResult run_route_job(RouteJob job) {
     log("routing finished; viewer still serving at " + server->url() + " (Ctrl-C to quit)");
     for (;;) std::this_thread::sleep_for(std::chrono::seconds(1));
   }
+  if (!hb.path.empty()) {
+    hb.halt();
+    hb.write({{"board", job.in},
+              {"stage", "done"},
+              {"routed", res.routed},
+              {"connections", res.connections},
+              {"open", res.connections - res.routed},
+              {"elapsed_s", hb.elapsed()},
+              {"done", true}});
+  }
   opt.sink = nullptr;
   return out;
 }
@@ -2170,6 +2569,7 @@ RouteJobResult run_layer_advisor(RouteJob job, std::vector<int> counts) {
   const auto input = io::read_board_file(job.in);
   const std::string final_out = job.out, final_json = job.json_out, final_items = job.items_out;
   nlohmann::json tried = nlohmann::json::array();
+  bool any_time_limited = false, any_kb_used = false, all_deterministic = true, any_stopped_early = false;  // over every count tried: a wall-clock stop or a knowledge-base influence in any of them shapes which count is chosen
   std::optional<RouteJobResult> best;
   int best_count = 0, best_open = 0;
   std::string best_tmp;
@@ -2201,6 +2601,10 @@ RouteJobResult run_layer_advisor(RouteJob job, std::vector<int> counts) {
     tried.push_back({{"copper_layers", c}, {"tried", true}, {"routed", r.result.routed}, {"connections", r.result.connections},
                      {"unconnected_after_refill", r.unconnected_after_refill}, {"vias", r.result.vias.size()}, {"complete", complete},
                      {"seconds", r.summary.value("seconds", 0.0)}, {"time_limited", r.summary.value("time_limited", false)}});
+    any_time_limited = any_time_limited || r.summary.value("time_limited", false);
+    any_stopped_early = any_stopped_early || r.summary.value("stopped_early", false);
+    any_kb_used = any_kb_used || r.summary.value("kb_used", false);
+    all_deterministic = all_deterministic && r.summary.value("deterministic", false);
     const std::string tmp = final_out.empty() ? std::string() : final_out + fmt(".%d-layers.tmp", c);
     if (!best || open < best_open) {
       if (!best_tmp.empty()) std::filesystem::remove(best_tmp);
@@ -2224,6 +2628,10 @@ RouteJobResult run_layer_advisor(RouteJob job, std::vector<int> counts) {
                : fmt("layers: no count tried completes; %d copper layers left the fewest open (%d)%s", best_count, best_open,
                      final_out.empty() ? "" : ("; written to " + final_out).c_str()));
   best->summary["layers"] = {{"tried", tried}, {"chosen", best_count}, {"complete", complete}};
+  best->summary["time_limited"] = any_time_limited;
+  best->summary["stopped_early"] = any_stopped_early;
+  best->summary["kb_used"] = any_kb_used;
+  best->summary["deterministic"] = all_deterministic;
   best->summary["run"]["output"] = final_out;
   best->summary["run"]["input"] = job.in;
   if (!final_items.empty()) std::ofstream(final_items) << best->items.dump();
@@ -2280,6 +2688,7 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
   int best_open = 0;
   int best_walled = 0;              // the guard's wall price of the best board so far (guard_walls only)
   bool best_walled_proved = false;  // best_walled is a proof over the current best board (guard_walls only)
+  bool best_fit = false;            // the best board was produced under rules fitted from the input (a kept fit rung)
   // A wall proof over a board file itself: a minimal route job whose why_open classifies the board's own open
   // pins against its own copper, at its own layer count. Used after a kept chains rung -- the one rung kind that
   // changes the best board without running a route, so no rung summary carries its walls (hardening #8).
@@ -2298,6 +2707,10 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
     pj.rescue = false;
     pj.why_open = true;
     pj.why_open_output = false;
+    // Price the board under the rules that produced it: when the kept best came from a fitted-rules rung, the
+    // proof fits from the original input too (the rungs fit from job.in, never from a rung's own copper). A
+    // job-level fit_rules_from already rides along in the copy and is left alone, as the rungs leave it.
+    if (best_fit && pj.fit_rules_from.empty()) pj.fit_rules_from = job.in;
     pj.opt.work_budget = 1;
     pj.log = nullptr;
     RouteJobResult pr = run_route_job(std::move(pj));
@@ -2306,6 +2719,7 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
     if (pr.result.connections > 0 && pr.result.routed >= pr.result.connections) return 0;
     return std::nullopt;
   };
+  bool any_time_limited = false, any_kb_used = false, all_deterministic = true, any_stopped_early = false;  // over every rung tried
   for (std::size_t k = 0; k < rungs.size(); ++k) {
     const Rung& rg = rungs[k];
     if (rg.chains) {
@@ -2324,6 +2738,7 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
                       {"copper_layers", best->summary.value("copper_layers", layers0)}, {"chains", cj["tally"]},
                       {"seconds", std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count()}});
       log(fmt("finish: rung %zu (%s): %d open%s", k + 1, rg.name.c_str(), open, kept ? "" : " (no better: discarded)"));
+      all_deterministic = false;  // a chains rung carries no determinism claim of its own: its audit sits outside this gate
       if (kept) {
         copy_project_files(best_tmp, tmp);
         remove_tmp(best_tmp);
@@ -2344,6 +2759,9 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
         best->summary["routed"] = conns - open;
         if (conns > 0) best->summary["completion_pct"] = 100.0 * (conns - open) / conns;
         best->summary.erase("failures");
+        best->summary.erase("open_connections");  // chains moved copper without a route: the previous rung's per-connection detail is stale too
+        best->summary.erase("rerouted");  // the rip belongs to the first rung's input, not to the board the chains finished
+        best->summary["exit_code"] = open == 0 ? 0 : 3;
         fs::copy_file(best_tmp, final_out, fs::copy_options::overwrite_existing);
         copy_project_files(job.in, final_out);
       } else {
@@ -2393,6 +2811,10 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
     if (r.summary.contains("fitted_rules")) row["fitted_rules"] = r.summary["fitted_rules"];
     if (r.summary.contains("repair")) row["repair"] = {{"open_before", r.summary["repair"].value("open_before", 0)}, {"open_after", r.summary["repair"].value("open_after", 0)}};
     rows.push_back(row);
+    any_time_limited = any_time_limited || r.summary.value("time_limited", false);
+    any_stopped_early = any_stopped_early || r.summary.value("stopped_early", false);
+    any_kb_used = any_kb_used || r.summary.value("kb_used", false);
+    all_deterministic = all_deterministic && r.summary.value("deterministic", false);
     if (guard_walls)
       log(fmt("finish: rung %zu (%s): %d open, %d walled in%s", k + 1, rg.name.c_str(), open, walled, kept ? "" : " (no better: discarded)"));
     else
@@ -2403,6 +2825,7 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
       best = std::move(r);
       best_tmp = tmp;
       best_open = open;
+      best_fit = rg.fit;
       if (guard_walls) {
         // The rung's walled prices the board it produced, which is now the best board: adopt it as its price.
         if (open == 0) {
@@ -2428,6 +2851,10 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
   log(best_open == 0 ? fmt("finish: complete after %zu rung%s; written to %s", rows.size(), rows.size() == 1 ? "" : "s", final_out.c_str())
                      : fmt("finish: %d open after every rung; written to %s", best_open, final_out.c_str()));
   best->summary["finish"] = {{"rungs", rows}, {"complete", best_open == 0}, {"open", best_open}};
+  best->summary["time_limited"] = any_time_limited;
+  best->summary["stopped_early"] = any_stopped_early;
+  best->summary["kb_used"] = any_kb_used;
+  best->summary["deterministic"] = all_deterministic;
   if (guard_walls && best_walled_proved) best->summary["finish"]["walled_in"] = best_walled;
   if (guard_walls && !best_walled_proved)
     log("finish: walled_in omitted from the summary: no wall proof of the final board could be computed");

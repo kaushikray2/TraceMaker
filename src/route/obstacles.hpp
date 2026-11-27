@@ -222,6 +222,8 @@ class Obstacles {
   bool soft_pad_masks_ = false;
   std::vector<Aperture> apertures_[2];               // pad solder-mask openings per side
   std::unique_ptr<index::UniformGrid> agrid_[2];
+  std::unique_ptr<index::UniformGrid> kgrid_;     // keepout polygons by bounding box (Stage 2B: indexed scans)
+  std::unique_ptr<index::UniformGrid> mgrid_[2];  // mask-opening graphics per side by bounding box
   std::vector<std::pair<int, geom::Shape>> texts_;   // copper text boxes (copper index, rectangle)
   Coord via_mask_ = 0;
   Coord max_hole_local_ = 0;                         // largest local (pad/footprint) clearance on a hole                               // mask expansion of untented vias (0 when tented)

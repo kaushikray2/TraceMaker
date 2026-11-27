@@ -15,6 +15,8 @@
 #include "geom/clip.hpp"
 #include "index/uniform_grid.hpp"
 
+#include "core/parallel.hpp"
+
 namespace tmk::drc {
 
 namespace {
@@ -179,13 +181,32 @@ class Filler {
     }
     for (auto& o : order)
       std::stable_sort(o.begin(), o.end(), [&](int a, int c) { return higher_priority(b_.zones[static_cast<std::size_t>(a)], b_.zones[static_cast<std::size_t>(c)]); });
-    // Layers are independent: one task per layer, results stored by (zone, layer).
-    std::vector<std::future<void>> tasks;
-    for (int l = 0; l < layers; ++l)
-      tasks.push_back(std::async(std::launch::async, [this, l, &order] {
-        for (const int z : order[static_cast<std::size_t>(l)]) fills_[static_cast<std::size_t>(z)][static_cast<std::size_t>(l)] = fill(z, l);
-      }));
-    for (auto& t : tasks) t.get();
+    // Layers are independent: one task per layer, results stored by (zone, layer). The fan-out honours
+    // the process thread cap (Stage 2B #19): the layer tasks CLAIM their slots under the cap
+    // (SecondaryScope), because refill runs concurrently inside portfolio variants' setup and a
+    // shared allowance read would let every caller spend the same headroom. With at most one
+    // claimed slot (the portfolio is using the cap, or one slot is left) the layers are filled
+    // inline on this thread rather than spawning a thread per layer. Results are stored per
+    // (zone, layer) either way, so the outcome does not depend on the schedule.
+    parallel::SecondaryScope claim(layers);
+    const int allowance = claim.count() < 0 ? layers : claim.count();
+    if (allowance <= 1) {
+      for (int l = 0; l < layers; ++l)
+        for (const int z : order[static_cast<std::size_t>(l)])
+          fills_[static_cast<std::size_t>(z)][static_cast<std::size_t>(l)] = fill(z, l);
+    } else {
+      std::vector<std::future<void>> tasks;
+      for (int l = 0; l < layers; ++l) {
+        tasks.push_back(std::async(std::launch::async, [this, l, &order] {
+          for (const int z : order[static_cast<std::size_t>(l)]) fills_[static_cast<std::size_t>(z)][static_cast<std::size_t>(l)] = fill(z, l);
+        }));
+        if (static_cast<int>(tasks.size()) >= allowance) {
+          for (auto& t : tasks) t.get();
+          tasks.clear();
+        }
+      }
+      for (auto& t : tasks) t.get();
+    }
 
     // Write the fills into the copy, one fractured polygon per island, then remove islands without a pad.
     std::vector<std::uint8_t> refilled(b_.zones.size(), 0);

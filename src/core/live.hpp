@@ -31,6 +31,15 @@ bool enabled();
 Slot* slot(const std::string& name);
 // Sets one line of the status ("stage", "board", "round", ...), shown in the order first set. An empty value removes it.
 void field(const std::string& key, const std::string& value);
+// A point-in-time read of the status for in-process consumers (the route job's --heartbeat file): the stage
+// line and the furthest-along router slot. routed/total are -1 until a router reports them; all defaults
+// when live status is off.
+struct Progress {
+  std::string stage;
+  int routed = -1, total = -1;
+  long work = 0, budget = 0;
+};
+Progress progress();
 // Adds a line to the log tail (the last 200 lines are kept).
 void log(const std::string& line);
 // printf to stderr and the log tail.

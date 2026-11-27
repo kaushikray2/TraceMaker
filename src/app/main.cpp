@@ -23,6 +23,7 @@
 #include "analysis/escape_proof.hpp"
 #include "analysis/return_path.hpp"
 #include "app/route_job.hpp"
+#include "app/batch.hpp"
 #include "app/tui.hpp"
 #include "app/tui_jobs.hpp"
 #include "core/live.hpp"
@@ -1346,6 +1347,19 @@ static int run_main(int argc, char** argv) {
                     "failure) and routed again; an attempt is kept only if no joined pads come apart and fewer connections are open. auto (default): "
                     "only on a board that came with unlocked tracks or vias; on: also on a board routed from nothing; off (doc 05 §75)")
       ->check(CLI::IsMember({"auto", "on", "off"}));
+  route->add_flag("--route-open-only", r_job.route_open_only,
+                  "Finisher mode for a partially routed board: the routed copper stays fixed and the connections still open are attacked "
+                  "with the repair windows in focused form -- each attempt routes only the open connection and the nets whose copper it "
+                  "lifted, with a per-connection budget (the job's --work, or four times the repair default) and portfolio attempts when "
+                  "the job runs variants. The route JSON reports route_open_only and open_at_start");
+  route->add_option("--reroute-net", r_job.reroute_nets,
+                    "With --route: bystander-safe re-route of only the named nets (pattern, repeatable, comma-separated): "
+                    "their unlocked copper is stripped and re-routed, all other copper stays fixed and untouched")
+      ->delimiter(',');
+  route->add_option("--reroute-window", r_job.reroute_window,
+                    "With --route: bystander-safe re-route of the nets with a pad inside X1,Y1,X2,Y2 (board mm): their "
+                    "copper inside the window is stripped and re-routed; copper crossing the boundary stays as fixed "
+                    "anchors and nets with no pad inside are untouched");
   route->add_option("--repair-window-mm", r_job.repair_opt.radii_mm, "Repair: window radii round each end of an open connection, tried in turn (default 1,2,4)")
       ->delimiter(',')->allow_extra_args(false);
   route->add_option("--repair-work", r_job.repair_opt.step_work, "Repair: work budget of each attempt in search expansions (default 3000000)");
@@ -1387,7 +1401,19 @@ static int run_main(int argc, char** argv) {
       ->check(CLI::NonNegativeNumber);
   route->add_option("--threads", r_threads,
                     "Threads for the portfolio (differently configured routers, best kept). Without --variants it is also the portfolio "
-                    "size, except with --work, where all variants run and the output is identical for any thread count");
+                    "size, except with --work, where all variants run and the output is identical for any thread count. A hard global cap "
+                    "for the whole job: no stage (portfolio, zone refill, repair) runs more concurrent workers than this, and the process "
+                    "thread peak stays within the cap + 2 (the main thread and the live-log writer)");
+  route->add_flag("--early-stop", r_job.early_stop,
+                  "Cancel sibling variants once one fully routes, also under --work (the winner then depends on timing: the run "
+                  "reports deterministic: false when it fires)");
+  route->add_flag("--no-early-stop", r_job.no_early_stop,
+                  "Never cancel sibling variants once one fully routes (measurement runs that need the full variant distribution)");
+  route->add_flag("--deterministic", r_job.deterministic_mode,
+                  "Promise a repeatable run in one switch: a seed is in effect (the fixed default 1 unless --seed is given), the "
+                  "knowledge base is off unless --kb is given, sibling early-stop is off, and a work budget is required (--work, or "
+                  "--round-work); --time may still be given as a safety net, but if it ever binds, the run reports deterministic: "
+                  "false with the reason (deterministic_violation). --threads changes only the wall clock, never the result");
   int r_variants = 0;
   route->add_option("--variants", r_variants,
                     "Portfolio size (1 = single router; default: all with --work, else --threads); the output never depends on --threads "
@@ -1483,6 +1509,12 @@ static int run_main(int argc, char** argv) {
   route->add_option("--view-embed", r_job.view_embed, "Pages that may show the viewer in a frame, origins separated by spaces (e.g. a dashboard: http://host:8771); default: none");
   route->add_flag("--hold", r_job.hold, "Keep serving the viewer after routing finishes");
   route->add_option("--json", r_json, "Write a result summary as JSON");
+  route->add_option("--heartbeat", r_job.heartbeat_out,
+                    "Write a JSON progress file (stage, routed, open, elapsed_s) rewritten every --heartbeat-s seconds while the job "
+                    "runs, and once more with done: true at the end; for backends polling a long job");
+  route->add_option("--heartbeat-s", r_job.heartbeat_s, "Heartbeat interval, seconds (default 10)")->check(CLI::PositiveNumber);
+  route->footer("Exit codes: 0 = every connection routed; 3 = the job ran but connections remain open (see open_connections in the "
+                "route JSON); 1 = the job failed to run (unreadable board, refused configuration); 2 = usage error.");
   route->add_option("--report", r_job.report_out,
                     "Write a run report for designers: what was routed, what is open and why, the rules read and not read, the signal-integrity "
                     "audit, the DRC before and after, the options and the seed. HTML, or Markdown if FILE ends in .md. Every number in it is a "
@@ -1532,6 +1564,16 @@ static int run_main(int argc, char** argv) {
       ->check(CLI::PositiveNumber);
   route->add_option("--stitch-return", r_job.stitch_returns, "Return-path stitching for nets as PATTERN=PLANE_NET, e.g. 'USB_D*=GND' (repeatable). Return-path stitching from component rules is experimental");
   route->add_option("--pass-work", r_job.pass_work, "Work budget of each after-route pass, in exact checks (default 2,000,000)")->check(CLI::PositiveNumber);
+
+  auto* batch_cmd = app.add_subcommand("route-batch", "Route every board of a JSON manifest in one process, through one global thread pool (issue #22)");
+  std::string batch_manifest, batch_json;
+  int batch_threads = 0;
+  batch_cmd->add_option("manifest", batch_manifest,
+                        "Batch manifest JSON: {\"threads\": N, \"options\": {...}, \"jobs\": [{\"input\", \"output\", \"json\", \"options\"}]}")
+      ->required()
+      ->check(CLI::ExistingFile);
+  batch_cmd->add_option("--threads", batch_threads, "Worker cap for the whole batch (default: the manifest's \"threads\", else the hardware concurrency)");
+  batch_cmd->add_option("--json", batch_json, "Write the batch summary JSON here (default: print it)");
 
   auto* rep = app.add_subcommand("report", "Render the run report from a route summary (route --json, with the sections route --report adds)");
   std::string rep_json, rep_out;
@@ -1767,7 +1809,16 @@ static int run_main(int argc, char** argv) {
   bool t_jobs = false;
   tui->add_flag("--jobs", t_jobs, "Open on the jobs screen: this user's route runs, what each has left, its options and what to change on a rerun");
 
-  CLI11_PARSE(app, argc, argv);
+  // The documented exit-code matrix (see route --help): 0 = done / every connection routed, 1 = the job
+  // failed to run, 2 = usage error, 3 = connections remain open. CLI11's own parse-error codes are an
+  // undocumented family (105, 106, ...), so they are normalized here: app.exit still prints the error,
+  // only the returned code is mapped.
+  try {
+    app.parse(argc, argv);
+  } catch (const CLI::ParseError& e) {
+    const int rc = app.exit(e);
+    return rc == 0 ? 0 : 2;
+  }
   if (*tui) {
     // The screen ends in a `route` run, a printed command or nothing. A run goes through the parser again, exactly
     // as if the user had typed the command.
@@ -1779,7 +1830,8 @@ static int run_main(int argc, char** argv) {
       app.clear();
       app.parse(next);
     } catch (const CLI::ParseError& e) {
-      return app.exit(e);
+      const int rc = app.exit(e);
+      return rc == 0 ? 0 : 2;  // usage error, as at the main parse (CLI11's own codes are not the contract)
     } catch (const std::exception& e) {
       std::fprintf(stderr, "error: %s\n", e.what());
       return 1;
@@ -1795,7 +1847,8 @@ static int run_main(int argc, char** argv) {
       app.clear();
       app.parse(all);
     } catch (const CLI::ParseError& e) {
-      return app.exit(e);
+      const int rc = app.exit(e);
+      return rc == 0 ? 0 : 2;  // usage error, as at the main parse (CLI11's own codes are not the contract)
     } catch (const std::exception& e) {
       std::fprintf(stderr, "error: %s\n", e.what());
       return 1;
@@ -1872,6 +1925,12 @@ static int run_main(int argc, char** argv) {
       std::printf("%d %s defects injected\n", n, bk_kind.c_str());
       return 0;
     }
+    if (*batch_cmd) {
+      return tmk::app::run_batch(batch_manifest, batch_threads, batch_json, [](const std::string& line) {
+        std::printf("%s\n", line.c_str());
+        std::fflush(stdout);
+      });
+    }
     if (*route) {
       tmk::route::check_layer_dir_specs(r_job.layer_dir, r_job.layer_diag_pen);  // a typo stops the run before the board is read
       ropt.pitch = static_cast<tmk::Coord>(r_pitch_um * 1000.0);
@@ -1910,6 +1969,9 @@ static int run_main(int argc, char** argv) {
       job.threads = r_threads;
       job.variants = r_variants;
       job.kb_path = r_nokb ? std::string() : r_kb;
+      job.seed_given = route->count("--seed") > 0;
+      job.kb_given = route->count("--kb") > 0;
+      job.time_given = route->count("--time") > 0;
       job.items_out = r_items;
       job.json_out = r_json;
       // The options as given (command line and --config), for the run report: what a reader needs to repeat the run.

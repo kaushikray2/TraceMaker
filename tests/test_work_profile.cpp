@@ -40,3 +40,18 @@ TEST_CASE("work profile: charged work equals counted expansions and flood cells,
   CHECK(t.expansions + t.flood_cells == one.best.expansions);
   CHECK(one.best.work.phase[static_cast<std::size_t>(route::WorkPhase::FirstPass)].searches > 0);
 }
+
+TEST_CASE("stopped_by: a plain run stopped by the clock reports time, not work", "[route][stopped_by]") {
+  if (!std::filesystem::exists(kBoard)) SKIP("board missing: " + kBoard);
+  const model::Board b = io::read_board_file(kBoard).board;
+  const auto rules = io::read_design_rules(kBoard);
+  route::RouterOptions opt;
+  opt.work_budget = 0;  // no work budget: the wall clock is the only bound
+  opt.round_work = 0;
+  opt.time_limit_s = 0.05;
+  opt.gpu_device = -1;
+  const auto pr = route::route_portfolio(b, rules, opt, 1, {}, 1);
+  REQUIRE(pr.best.routed < pr.best.connections);
+  REQUIRE(pr.best.time_limited);
+  CHECK(pr.stopped_by == "time");
+}

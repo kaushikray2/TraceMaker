@@ -21,6 +21,7 @@ Subcommands:
   rules                       Detect component categories and report the component-aware layout rules (doc 15)
   drc                         Check a board against its KiCad design rules
   route                       Route all unrouted connections of a board
+  route-batch                 Route every board of a JSON manifest in one process, through one global thread pool (issue #22)
   report                      Render the run report from a route summary (route --json, with the sections route --report adds)
   escape                      Escape feasibility of dense packages: pins that cannot leave their package under the board's rules
   pairs                       Differential pairs of a routed board: coupled share, gap, intra-pair skew
@@ -182,6 +183,9 @@ Options:
   --only-net TEXT ...         Route only the nets that match one of these patterns (KiCad wildcards such as '/I2S_*', or regular expressions; repeatable or comma separated); the other nets are left unrouted and their copper stays (staged routing)
   --skip-net TEXT ...         Leave the nets that match these patterns unrouted (KiCad wildcards or regular expressions; repeatable or comma separated)
   --repair TEXT:{auto,on,off} Repair windows for connections still open at the end: the unlocked copper near each is lifted (a window that grows on each failure) and routed again; an attempt is kept only if no joined pads come apart and fewer connections are open. auto (default): only on a board that came with unlocked tracks or vias; on: also on a board routed from nothing; off (doc 05 §75)
+  --route-open-only           Finisher mode for a partially routed board: the routed copper stays fixed and the connections still open are attacked with the repair windows in focused form -- each attempt routes only the open connection and the nets whose copper it lifted, with a per-connection budget (the job's --work, or four times the repair default) and portfolio attempts when the job runs variants. The route JSON reports route_open_only and open_at_start
+  --reroute-net TEXT ...      With --route: bystander-safe re-route of only the named nets (pattern, repeatable, comma-separated): their unlocked copper is stripped and re-routed, all other copper stays fixed and untouched
+  --reroute-window TEXT       With --route: bystander-safe re-route of the nets with a pad inside X1,Y1,X2,Y2 (board mm): their copper inside the window is stripped and re-routed; copper crossing the boundary stays as fixed anchors and nets with no pad inside are untouched
   --repair-window-mm FLOAT ...
                               Repair: window radii round each end of an open connection, tried in turn (default 1,2,4)
   --repair-work INT           Repair: work budget of each attempt in search expansions (default 3000000)
@@ -211,7 +215,10 @@ Options:
   --no-kb                     Do not read or update the knowledge base
   --class-cache-mb FLOAT:NONNEGATIVE
                               Memory bound of each router's fixed-obstacle caches, in MB (0 = none; default 2048). Past it the oldest are freed and computed again: more time, and the result may differ from an unbounded run (still deterministic)
-  --threads INT               Threads for the portfolio (differently configured routers, best kept). Without --variants it is also the portfolio size, except with --work, where all variants run and the output is identical for any thread count
+  --threads INT               Threads for the portfolio (differently configured routers, best kept). Without --variants it is also the portfolio size, except with --work, where all variants run and the output is identical for any thread count. A hard global cap for the whole job: no stage (portfolio, zone refill, repair) runs more concurrent workers than this, and the process thread peak stays within the cap + 2 (the main thread and the live-log writer)
+  --early-stop                Cancel sibling variants once one fully routes, also under --work (the winner then depends on timing: the run reports deterministic: false when it fires)
+  --no-early-stop             Never cancel sibling variants once one fully routes (measurement runs that need the full variant distribution)
+  --deterministic             Promise a repeatable run in one switch: a seed is in effect (the fixed default 1 unless --seed is given), the knowledge base is off unless --kb is given, sibling early-stop is off, and a work budget is required (--work, or --round-work); --time may still be given as a safety net, but if it ever binds, the run reports deterministic: false with the reason (deterministic_violation). --threads changes only the wall clock, never the result
   --variants INT              Portfolio size (1 = single router; default: all with --work, else --threads); the output never depends on --threads with --work. --time applies to each variant from its start
   --no-tracks-on TEXT ...     Copper layers that get no new tracks, e.g. In1.Cu,In2.Cu (vias still pass through and reach zone fills there)
   --layer-cost TEXT ...       Track cost per layer as LAYER=FACTOR, e.g. In1.Cu=4,In2.Cu=4 (1 = normal, at most 1000)
@@ -272,6 +279,9 @@ Options:
   --view-embed TEXT           Pages that may show the viewer in a frame, origins separated by spaces (e.g. a dashboard: http://host:8771); default: none
   --hold                      Keep serving the viewer after routing finishes
   --json TEXT                 Write a result summary as JSON
+  --heartbeat TEXT            Write a JSON progress file (stage, routed, open, elapsed_s) rewritten every --heartbeat-s seconds while the job runs, and once more with done: true at the end; for backends polling a long job
+  --heartbeat-s FLOAT:POSITIVE
+                              Heartbeat interval, seconds (default 10)
   --report TEXT               Write a run report for designers: what was routed, what is open and why, the rules read and not read, the signal-integrity audit, the DRC before and after, the options and the seed. HTML, or Markdown if FILE ends in .md. Every number in it is a field of the --json summary (written to FILE.json when --json is not given)
   --component-rules TEXT:{off,report,soft,on}
                               Component-aware rules (doc 15): off (default); report/soft write <output>.tracemaker.kicad_dru; on also routes with the generated keep-outs (crystal, switching-regulator inductor) as in-memory rule areas
@@ -303,6 +313,24 @@ Options:
                               Return-path stitching: largest distance from a signal via to its plane via, mm (default: the rule's, else 5.08)
   --stitch-return TEXT ...    Return-path stitching for nets as PATTERN=PLANE_NET, e.g. 'USB_D*=GND' (repeatable). Return-path stitching from component rules is experimental
   --pass-work INT:POSITIVE    Work budget of each after-route pass, in exact checks (default 2,000,000)
+
+
+Exit codes: 0 = every connection routed; 3 = the job ran but connections remain open (see open_connections in the route JSON); 1 = the job failed to run (unreadable board, refused configuration); 2 = usage error.
+```
+
+### `tracemaker route-batch`
+
+```text
+Route every board of a JSON manifest in one process, through one global thread pool (issue #22)
+Usage: tracemaker route-batch [OPTIONS] manifest
+
+Positionals:
+  manifest TEXT:FILE REQUIRED Batch manifest JSON: {"threads": N, "options": {...}, "jobs": [{"input", "output", "json", "options"}]}
+
+Options:
+  -h,--help                   Print this help message and exit
+  --threads INT               Worker cap for the whole batch (default: the manifest's "threads", else the hardware concurrency)
+  --json TEXT                 Write the batch summary JSON here (default: print it)
 ```
 
 ### `tracemaker report`
