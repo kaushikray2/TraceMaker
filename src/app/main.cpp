@@ -1524,7 +1524,11 @@ static int run_main(int argc, char** argv) {
                     "runs, and once more with done: true at the end; for backends polling a long job");
   route->add_option("--heartbeat-s", r_job.heartbeat_s, "Heartbeat interval, seconds (default 10)")->check(CLI::PositiveNumber);
   route->footer("Exit codes: 0 = every connection routed; 3 = the job ran but connections remain open (see open_connections in the "
-                "route JSON); 1 = the job failed to run (unreadable board, refused configuration); 2 = usage error.");
+                "route JSON); 1 = the job failed to run (unreadable board, refused configuration); 2 = usage error. "
+                "The 1/2 boundary is who refuses: syntax and conversion errors from the argument parser (an unknown flag, a "
+                "non-numeric value for a numeric option) exit 2; the binary's own validation refusals exit 1 - "
+                "--deterministic without a work budget, a malformed --reroute-window or --window value, an out-of-range "
+                "value the parser accepts syntactically.");
   route->add_option("--report", r_job.report_out,
                     "Write a run report for designers: what was routed, what is open and why, the rules read and not read, the signal-integrity "
                     "audit, the DRC before and after, the options and the seed. HTML, or Markdown if FILE ends in .md. Every number in it is a "

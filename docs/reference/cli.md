@@ -160,6 +160,7 @@ Options:
                               Plan connections by copper-to-copper distance between pads rather than centre to centre (default on)
   --escape-plan,--no-escape-plan{false}
                               Reserve escape corridors for the pins of dense packages (QFP, BGA) before routing
+  --escape-release-open       With --escape-plan: at the first negotiation pass, give back the corridors of pads no routed connection used (issue 39)
   --soft-pad-masks            Pad solder-mask openings do not keep other nets' tracks and vias out; KiCad reports solder_mask_bridge where one lies in an opening (judgement; --fit-rules-from turns it on when the reference does it; doc 20 §2.13)
   --soft-copper-graphics      Board copper graphics (polygons on a copper layer, e.g. an EasyEDA import's pours) take the net of the one net whose pads, tracks or vias they touch: that net may touch them, no other (default: net-less copper nothing may touch)
   --escape-flow               Escape plan v2: min-cost-flow channel and layer assignment for deep BGA arrays (implies --escape-plan; experimental)
@@ -316,7 +317,7 @@ Options:
   --pass-work INT:POSITIVE    Work budget of each after-route pass, in exact checks (default 2,000,000)
 
 
-Exit codes: 0 = every connection routed; 3 = the job ran but connections remain open (see open_connections in the route JSON); 1 = the job failed to run (unreadable board, refused configuration); 2 = usage error. Exit 3 has a second cause: with soft zones, the exit code is decided by what KiCad's zone refill would leave unconnected, so a job whose connections all routed can still exit 3 on pour fallout. The route JSON's exit_reason field says which cause decided the code: complete (exit 0), open_connections, or unconnected_after_refill.
+Exit codes: 0 = every connection routed; 3 = the job ran but connections remain open (see open_connections in the route JSON); 1 = the job failed to run (unreadable board, refused configuration); 2 = usage error. The 1/2 boundary is who refuses: syntax and conversion errors from the argument parser (an unknown flag, a non-numeric value for a numeric option) exit 2; the binary's own validation refusals exit 1 - --deterministic without a work budget, a malformed --reroute-window or --window value, an out-of-range value the parser accepts syntactically.
 ```
 
 ### `tracemaker route-batch`
@@ -590,6 +591,12 @@ Options:
   --threads INT:INT in [1 - 256]
                               Open connections measured at once (the result does not depend on it; default 8)
   --seed UINT                 Router seed (default 1)
+  --clique,--no-clique{false} Phase 3B: on a too_deep / lifted_net_no_path_bare failure, one bounded clique attempt at the root over the nets the chain lifted or blamed (default on)
+  --clique-work INT           Work budget of the clique portfolio attempt (default 8 M)
+  --clique-variants INT:INT in [1 - 16]
+                              Portfolio variants of the clique attempt (default 6)
+  --clique-max-nets INT:INT in [3 - 64]
+                              Clique attempts over more nets than this are not attempted (default 12)
   --soft-zones                Zone fills do not block other nets (as route --soft-zones)
   --no-fill-planes{false}     Do not fill zones that have no fill
 ```
