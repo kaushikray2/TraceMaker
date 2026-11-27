@@ -2873,7 +2873,7 @@ struct Router::Impl {
           commit_why = "would rip a bus connection";
           return false;
         }
-    if (opt.protect_coupled)  // a ripped half takes its partner with it, and the pair is seldom coupled again (issue #67, D175)
+    if (opt.protect_coupled || txn_on)  // a ripped half takes its partner with it, and the pair is seldom coupled again (issue #67, D175); inside a transaction the refusal is unconditional, because the transaction's victim log names only the crossed half - an accepted transaction would displace the partner uncounted (issue 38 item 3 prerequisite)
       for (int v : victims)
         if (cs[static_cast<std::size_t>(v)].coupled) {
           commit_why = "would rip a coupled pair half";
@@ -3029,6 +3029,10 @@ struct Router::Impl {
   struct TxnSnap {
     std::vector<std::vector<OldItem>> items;
     std::vector<std::uint8_t> routed, implicit;
+    // The flags rip() clears as it un-routes a connection. Without them a rollback restored a ripped
+    // pair's copper but left it marked uncoupled (and its lanes unmarked), corrupting every later
+    // decision that keys on those flags (issue 38 item 3 prerequisite).
+    std::vector<std::uint8_t> coupled, bus_lane, bundle_lane;
     std::vector<int> rips;
     int res_routed = 0, res_rips = 0;
   };
@@ -3042,6 +3046,9 @@ struct Router::Impl {
       }
       snap_.routed.push_back(cs[k].routed ? 1 : 0);
       snap_.implicit.push_back(cs[k].implicit ? 1 : 0);
+      snap_.coupled.push_back(cs[k].coupled ? 1 : 0);
+      snap_.bus_lane.push_back(cs[k].bus_lane ? 1 : 0);
+      snap_.bundle_lane.push_back(cs[k].bundle_lane ? 1 : 0);
       snap_.rips.push_back(cs[k].rips);
     }
     snap_.res_routed = res.routed;
@@ -3054,12 +3061,25 @@ struct Router::Impl {
       restore_items(static_cast<int>(k), snap_.items[k]);
       cs[k].routed = snap_.routed[k] != 0;
       cs[k].implicit = snap_.implicit[k] != 0;
+      cs[k].coupled = snap_.coupled[k] != 0;
+      cs[k].bus_lane = snap_.bus_lane[k] != 0;
+      cs[k].bundle_lane = snap_.bundle_lane[k] != 0;
       cs[k].rips = snap_.rips[k];
     }
     res.routed = snap_.res_routed;
     res.rips = snap_.res_rips;
   }
   std::vector<std::uint8_t> txn_protect;  // connections a nested search must not rip: the transaction's route and its re-routed victims
+  // No pairs at all, or every wanted pair routed coupled: the only board states in which singles
+  // negotiate transactionally next to pairs. A transaction never rips a coupled half (commit
+  // refuses it while txn_on), and a split pair's halves are still being exchanged by the recouple
+  // pass, whose movements the transaction snapshot does not model (issue 38 item 3 prerequisite).
+  bool pairs_all_coupled() const {
+    if (pair_partner.empty()) return true;
+    for (std::size_t k = 0; k < cs.size(); ++k)
+      if (pair_partner[k] >= 0 && !cs[k].coupled) return false;
+    return true;
+  }
   int txn_nested_left = 0;
   // Routes connection ci, negotiated, as a transaction. The route is kept only if the victims it rips can be re-routed
   // (strictly, or at depth > 0 by a nested transaction of their own); `gain` is then 1 minus the victims left unrouted.
@@ -7768,7 +7788,7 @@ struct Router::Impl {
           if (!ok) reason += "; via retry: " + why;
         }
         if (!ok && opt.rip_up && (pass > 0 || !opt.strict_first || opt.warm)) {
-          const bool use_txn = opt.txn > 0 && pair_partner.empty() && conn_bundle.empty();
+          const bool use_txn = opt.txn > 0 && pairs_all_coupled() && conn_bundle.empty();
           if (use_txn) {
             int gain = 0;
             txn_nested_left = opt.txn_nested;
