@@ -523,3 +523,80 @@ TEST_CASE("pair measurement: the coupled threshold is the layer's own (issue 61)
 // scalar by design (it mirrors KiCad, which has no per-layer gap). The in-scope parts (the
 // pair_rule floor, halves_clear's per-layer required gap, measure_pair's per-layer thresholds)
 // are pinned by the two unit tests above.
+
+namespace {
+
+// Issue 63: 36 x 16 mm, four layers (In2.Cu and B.Cu banded over). One connection, pads on F.Cu.
+// F.Cu wall 1 (x = 12) has a 0.60 mm slot: the class width (0.30) plus clearances does not fit, the
+// neck width (0.15) does. F.Cu wall 2 (x = 24) is solid, so the connection must dive to In1.Cu
+// between the walls. The In1.Cu wall (x = 18) has a 0.52 mm slot: it takes the layer's own width
+// (0.10, from the class's per-layer map) but not the neck width (0.15). Before the fix, width_on
+// returned the neck override unconditionally, the In1.Cu slot refused the widened track, and the
+// connection stayed open; with the override as a cap it crosses at 0.10.
+model::Board neck_slot_board() {
+  std::string s = R"((kicad_pcb (version 20240108) (generator "pcbnew")
+  (general (thickness 1.6))
+  (layers (0 "F.Cu" signal) (1 "In1.Cu" signal) (2 "In2.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (net 0 "") (net 1 "SIG") (net 2 "W") (net 3 "B")
+)";
+  auto seg = [&s](double x0, double y0, double x1, double y1, double w, const char* layer, int net) {
+    s += "  (segment (start " + std::to_string(x0) + " " + std::to_string(y0) + ") (end " + std::to_string(x1) + " " +
+         std::to_string(y1) + ") (width " + std::to_string(w) + ") (locked yes) (layer \"" + layer + "\") (net " +
+         std::to_string(net) + "))\n";
+  };
+  for (const int x : {3, 33}) {
+    const std::string ref = x == 3 ? "U1" : "U2", at = std::to_string(x);
+    s += "  (footprint \"T:P\" (layer \"F.Cu\") (at " + at + " 8) (property \"Reference\" \"" + ref + "\")\n"
+         "    (pad \"1\" smd rect (at 0 0) (size 1 1) (layers \"F.Cu\") (net 1 \"SIG\")))\n";
+  }
+  seg(12, 0, 12, 7.55, 0.3, "F.Cu", 2);   // F.Cu wall 1: copper to y 7.7 and from y 8.3 (0.60 slot)
+  seg(12, 8.45, 12, 16, 0.3, "F.Cu", 2);
+  seg(24, 0, 24, 16, 0.3, "F.Cu", 2);    // F.Cu wall 2: solid
+  seg(12, 0, 12, 16, 0.3, "In1.Cu", 3);   // In1.Cu wall A: solid - no diving before the F.Cu slot
+  seg(18, 0, 18, 7.59, 0.3, "In1.Cu", 3);  // In1.Cu wall B: copper to y 7.74 and from y 8.26 (0.52 slot)
+  seg(18, 8.41, 18, 16, 0.3, "In1.Cu", 3);
+  seg(0, 8, 36, 8, 16, "In2.Cu", 3);
+  seg(0, 8, 36, 8, 16, "B.Cu", 3);
+  s += "  (gr_rect (start 0 0) (end 36 16) (stroke (width 0.1) (type default)) (fill none) (layer \"Edge.Cuts\"))\n)\n";
+  return io::read_board(sexpr::Document::parse(s));
+}
+
+}  // namespace
+
+TEST_CASE("neck-down: the override caps a layer's own narrower width instead of widening it (issue 63)", "[diffpair][route]") {
+  const auto b = neck_slot_board();
+  model::DesignRules r;
+  model::NetClass k;
+  k.name = "Default";
+  k.clearance = 200'000;
+  k.track_width = 300'000;
+  k.via_diameter = 500'000;
+  k.via_drill = 250'000;
+  k.track_width_on["In1.Cu"] = 100'000;
+  r.classes.push_back(k);
+  r.minimums.track_width = 50'000;  // neck width: max(0.05, min(0.30, 0.15)) = 0.15
+  r.minimums.allow_blind_buried_vias = true;
+  route::RouterOptions o;
+  o.work_budget = 3'000'000;
+  o.time_limit_s = 600;
+  o.gpu_device = -1;
+  o.blind_vias = true;
+  const auto res = route::Router(b, r, o).run();
+  REQUIRE(res.routed == res.connections);
+  CHECK(res.necked >= 1);  // the F.Cu slot forced the neck rung
+  int in1 = 0, fcu = 0;
+  for (const auto& t : res.tracks) {
+    if (t.net != 1) continue;
+    if (t.layer == 1) {
+      ++in1;
+      CHECK(t.width == 100'000);  // In1.Cu keeps its own width under the neck override (was 150'000)
+    }
+    if (t.layer == 0) {
+      ++fcu;
+      CHECK(t.width == 150'000);  // F.Cu runs at the neck width
+    }
+  }
+  CHECK(in1 > 0);
+  CHECK(fcu > 0);
+}

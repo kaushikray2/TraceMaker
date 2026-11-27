@@ -595,28 +595,37 @@ struct Router::Impl {
   bool via_override = false;  // escalation rung: the neck-down via
   Coord via_drill(NetId net) const { return via_override ? neck_via_drill(net) : class_via_drill(net); }
   Coord via_diameter(NetId net) const { return via_override ? neck_via_diameter(net) : class_via_diameter(net); }
-  Coord width_override = 0;   // > 0: neck-down width for the current attempt (escalation rung)
+  Coord width_override = 0;   // > 0: width for the current attempt (an escalation rung)
+  bool width_override_caps = false;  // a neck-down override caps each layer's own width (issue 63); the preferred-width override replaces it
   bool force_escapes = false; // escalation rung: off-lattice escapes even when the pad has lattice exits
   Coord class_width(NetId net) const { return std::max(netclass(net).track_width, rules.minimums.track_width); }
   Coord track_width(NetId net) const { return width_override > 0 ? width_override : class_width(net); }
   // The width on one layer (issue 37, 3C-1): the class's per-layer map (component rules solve a
   // narrower track on inner layers for the same impedance) wins over the scalar; a tuning profile's
-  // per-layer width is next; the scalar class width is the fallback for unlisted layers. The
-  // neck-down override still wins over everything, as it does for track_width. A mapped width is a
-  // routing target, never below the board minimum.
+  // per-layer width is next; the scalar class width is the fallback for unlisted layers. A mapped
+  // width is a routing target, never below the board minimum. A neck-down override CAPS the
+  // result (issue 63): it used to replace it unconditionally, so on a layer whose own width is
+  // already narrower than the neck width, an attempt at the neck rung widened the track there.
+  // The preferred-width override (wider than the class by construction, D184) still replaces it.
   Coord width_on(NetId net, int layer) const {
-    if (width_override > 0) return width_override;
     const auto& nc = netclass(net);
+    Coord w = class_width(net);
+    bool mapped = false;
     if (!nc.track_width_on.empty()) {
-      if (const auto it = nc.track_width_on.find(b.copper_name(layer)); it != nc.track_width_on.end())
-        return std::max(it->second, rules.minimums.track_width);
+      if (const auto it = nc.track_width_on.find(b.copper_name(layer)); it != nc.track_width_on.end()) {
+        w = std::max(it->second, rules.minimums.track_width);
+        mapped = true;
+      }
     }
     // A differential profile keeps its established treatment (route_job: pairs routed at one
     // layer geometry and kept off the other layers), so only single-ended profiles apply here.
-    if (const auto* prof = rules.profile_of(nc); prof && !prof->differential) {
-      if (const Coord w = prof->width_on(b.copper_name(layer)); w > 0) return std::max(w, rules.minimums.track_width);
+    if (!mapped) {
+      if (const auto* prof = rules.profile_of(nc); prof && !prof->differential) {
+        if (const Coord pw = prof->width_on(b.copper_name(layer)); pw > 0) w = std::max(pw, rules.minimums.track_width);
+      }
     }
-    return class_width(net);
+    if (width_override > 0) w = width_override_caps ? std::min(w, width_override) : width_override;
+    return w;
   }
   // Narrowest legal width to fall back to: the board minimum (KiCad's track_width rule), but not below 0.15 mm
   // unless the board minimum itself is smaller and non-zero.
@@ -1133,17 +1142,21 @@ struct Router::Impl {
   std::unordered_map<std::int64_t, std::vector<Escape>> escape_cache;  // (pad, width) -> escapes valid against fixed copper
 
   const std::vector<Escape>& escapes(int pad) {
-    const std::int64_t ekey = static_cast<std::int64_t>(pad) * 4'000'000 + track_width(b.pads[static_cast<std::size_t>(pad)].net) / 1000;
+    // The cache key fingerprints the per-layer widths the escapes are generated at (issue 63).
+    const NetId keynet = b.pads[static_cast<std::size_t>(pad)].net;
+    std::int64_t wf = track_width(keynet) / 1000;
+    for (int l = 0; l < nl; ++l) wf = wf * 31 + width_on(keynet, l) / 1000;
+    const std::int64_t ekey = static_cast<std::int64_t>(pad) * 4'000'000 + (wf & 0x1FFFFF);
     if (auto it = escape_cache.find(ekey); it != escape_cache.end()) return it->second;
     std::vector<Escape> out;
     const auto& p = b.pads[static_cast<std::size_t>(pad)];
     const NetId net = p.net;
-    const Coord width = track_width(net);
     const Coord stepl = std::max<Coord>(pitch / 2, 10'000);
     const bool saved_soft = soft;
     soft = false;
     for (int l = 0; l < nl; ++l) {
       if (!(p.copper & model::layer_bit(l)) || !layer_ok(net, l)) continue;
+      const Coord width = width_on(net, l);  // this layer's width (issue 63)
       for (int d = 0; d < 8; ++d) {
         const double ux = kDx[d] / ((d & 1) ? std::numbers::sqrt2 : 1.0), uy = kDy[d] / ((d & 1) ? std::numbers::sqrt2 : 1.0);
         for (int k = 1; k <= 40; ++k) {
@@ -1171,10 +1184,10 @@ struct Router::Impl {
   // Cached per pad against fixed copper; routed copper is checked by the search and at commit.
   void add_escapes(const Window& w, int pad, Endpoint& e) {
     const auto& p = b.pads[static_cast<std::size_t>(pad)];
-    const Coord width = track_width(p.net);
     for (const auto& x : escapes(pad)) {
       const int cx = x.gx - w.x0, cy = x.gy - w.y0;
       if (cx < 0 || cy < 0 || cx >= w.w || cy >= w.h) continue;
+      const Coord width = width_on(p.net, x.layer);  // the escape's own layer (issue 63)
       // Against current routed copper too (the cache only knows fixed copper).
       if (point_state(x.layer, x.gx, x.gy, p.net, width / 2) == 2) continue;
       if (obs->segment_state(p.pos, x.stub, x.layer, width, p.net, soft) == 2) continue;
@@ -1501,10 +1514,9 @@ struct Router::Impl {
     // Escapes only for pads without a usable lattice point of their own (typically fine-pitch pins): elsewhere
     // they steal space other pins need.
     bool any_free = false;
-    const Coord width = track_width(p.net);
     for (const auto& [l, ci] : e.cells) {
       const int gx = w.x0 + static_cast<int>(ci % w.w), gy = w.y0 + static_cast<int>(ci / w.w);
-      if (point_state(l, gx, gy, p.net, width / 2) != 2) {
+      if (point_state(l, gx, gy, p.net, width_on(p.net, l) / 2) != 2) {  // the cell's layer width (issue 63)
         any_free = true;
         break;
       }
@@ -1528,7 +1540,7 @@ struct Router::Impl {
     const auto& p = b.pads[static_cast<std::size_t>(pad)];
     const Point V = it->second.first;
     const int l = it->second.second;
-    const Coord width = track_width(p.net);
+    const Coord width = width_on(p.net, l);  // the stub's layer (issue 63)
     if (!layer_ok(p.net, l) || !(p.copper & model::layer_bit(l))) return;
     if (obs->segment_state(p.pos, V, l, width, p.net, soft) == 2) return;
     for (int oy = 0; oy <= 1; ++oy)
@@ -1557,18 +1569,22 @@ struct Router::Impl {
   };
   std::unordered_map<std::int64_t, std::vector<ViaDrop>> drop_cache;
   const std::vector<ViaDrop>& via_drops(int pad) {
-    const std::int64_t dkey = static_cast<std::int64_t>(pad) * 4'000'000 + track_width(b.pads[static_cast<std::size_t>(pad)].net) / 1000;
+    const NetId keynet = b.pads[static_cast<std::size_t>(pad)].net;
+    std::int64_t wf = track_width(keynet) / 1000;
+    for (int l = 0; l < nl; ++l) wf = wf * 31 + width_on(keynet, l) / 1000;  // per-layer widths, as in escapes() (issue 63)
+    const std::int64_t dkey = static_cast<std::int64_t>(pad) * 4'000'000 + (wf & 0x1FFFFF);
     if (auto it = drop_cache.find(dkey); it != drop_cache.end()) return it->second;
     std::vector<ViaDrop> out;
     const auto& p = b.pads[static_cast<std::size_t>(pad)];
     const NetId net = p.net;
-    const Coord width = track_width(net), vd = via_diameter(net), vdrill = via_drill(net);
+    const Coord vd = via_diameter(net), vdrill = via_drill(net);
     const Coord stepl = std::max<Coord>(pitch / 2, 10'000);
     const bool saved_soft = soft;
     soft = false;
     if (vias_ok(net) && vd > 0)
       for (int l = 0; l < nl; ++l) {
         if (!(p.copper & model::layer_bit(l)) || !layer_ok(net, l)) continue;
+        const Coord width = width_on(net, l);  // the leg runs on the pad's layer (issue 63)
         for (int d = 0; d < 8; ++d) {
           const double ux = kDx[d] / ((d & 1) ? std::numbers::sqrt2 : 1.0), uy = kDy[d] / ((d & 1) ? std::numbers::sqrt2 : 1.0);
           std::vector<char> found(static_cast<std::size_t>(nl), 0);
@@ -1582,9 +1598,9 @@ struct Router::Impl {
               for (int oy = 0; oy <= 1 && !found[static_cast<std::size_t>(l2)]; ++oy)
                 for (int ox = 0; ox <= 1; ++ox) {
                   const int gx = vx + ox, gy = vy + oy;
-                  if (gx < 0 || gy < 0 || gx >= nx || gy >= ny || fixed_point_blocked(l2, gx, gy, net, width / 2)) continue;
+                  if (gx < 0 || gy < 0 || gx >= nx || gy >= ny || fixed_point_blocked(l2, gx, gy, net, width_on(net, l2) / 2)) continue;
                   const Point C = at(gx, gy);
-                  if (obs->segment_state(V, C, l2, width, net, true) == 2) continue;
+                  if (obs->segment_state(V, C, l2, width_on(net, l2), net, true) == 2) continue;  // the landing layer's width (issue 63)
                   out.push_back({l, l2, gx, gy, V,
                                  static_cast<std::int64_t>(std::hypot(static_cast<double>(V.x - p.pos.x), static_cast<double>(V.y - p.pos.y)) +
                                                            std::hypot(static_cast<double>(C.x - V.x), static_cast<double>(C.y - V.y)))});
@@ -1604,15 +1620,15 @@ struct Router::Impl {
   }
   void add_via_drops(const Window& w, int pad, Endpoint& e) {
     const auto& p = b.pads[static_cast<std::size_t>(pad)];
-    const Coord width = track_width(p.net), vd = via_diameter(p.net), vdrill = via_drill(p.net);
+    const Coord vd = via_diameter(p.net), vdrill = via_drill(p.net);
     const std::int64_t via_price = static_cast<std::int64_t>(opt.via_cost_mm * via_cost_mult * via_mult_of(p.net) * 1e6);
     for (const auto& x : via_drops(pad)) {
       const int cx = x.gx - w.x0, cy = x.gy - w.y0;
       if (cx < 0 || cy < 0 || cx >= w.w || cy >= w.h) continue;
-      if (point_state(x.layer, x.gx, x.gy, p.net, width / 2) == 2) continue;
-      if (obs->segment_state(p.pos, x.via, x.pad_layer, width, p.net, soft) == 2) continue;
+      if (point_state(x.layer, x.gx, x.gy, p.net, width_on(p.net, x.layer) / 2) == 2) continue;  // per-layer widths (issue 63)
+      if (obs->segment_state(p.pos, x.via, x.pad_layer, width_on(p.net, x.pad_layer), p.net, soft) == 2) continue;
       if (obs->via_state(x.via, vd, vdrill, p.net, 0, soft) == 2) continue;
-      if (obs->segment_state(x.via, at(x.gx, x.gy), x.layer, width, p.net, soft) == 2) continue;
+      if (obs->segment_state(x.via, at(x.gx, x.gy), x.layer, width_on(p.net, x.layer), p.net, soft) == 2) continue;
       e.drop_layer.resize(e.cells.size(), -1);
       e.cells.emplace_back(x.layer, static_cast<std::int64_t>(cy) * w.w + cx);
       e.stub.push_back(x.via);
@@ -2158,19 +2174,20 @@ struct Router::Impl {
       zone_poly = &z.shapes.front().pts;
       zone_box = z.shapes.front().box;
     }
+    const Coord zone_hw = zone_layer >= 0 ? width_on(net, zone_layer) / 2 : hw;  // the zone layer's own half width (issue 63)
     auto target = [&](int l, std::int64_t ci) -> bool {
       const std::size_t ti = static_cast<std::size_t>(l) * cells + static_cast<std::size_t>(ci);
       const std::uint8_t t = tgt_of(ti);
       if (t == 1) return true;
       if (t == 2 || l != zone_layer) return false;
       const int cx = static_cast<int>(ci % w.w), cy = static_cast<int>(ci / w.w);
-      const geom::Shape pt = geom::Shape::point(at(w.x0 + cx, w.y0 + cy), hw);
-      // Inside the fill and the whole track end disk on copper: no fill edge within hw.
+      const geom::Shape pt = geom::Shape::point(at(w.x0 + cx, w.y0 + cy), zone_hw);
+      // Inside the fill and the whole track end disk on copper: no fill edge within the half width.
       bool inside = geom::point_in_polygon(pt.pts[0], *zone_poly);
       if (inside) {
         const auto& poly = *zone_poly;
         for (std::size_t i = 0, j = poly.size() - 1; i < poly.size() && inside; j = i++)
-          if (geom::point_seg_closer(pt.pts[0], poly[j], poly[i], hw + pitch)) inside = false;
+          if (geom::point_seg_closer(pt.pts[0], poly[j], poly[i], zone_hw + pitch)) inside = false;
       }
       tgt_set(ti, inside ? 1 : 2);
       return inside;
@@ -8046,6 +8063,7 @@ struct Router::Impl {
         // and the usual ladder below (D184).
         if (!ok && !lane && preferred_width(st.c.net) > 0) {
           width_override = preferred_width(st.c.net);
+          width_override_caps = false;  // the preferred width replaces, it does not cap (issue 63)
           ok = search_and_commit(st.c, false);
           width_override = 0;
           if (ok) ++res.wide;
@@ -8059,10 +8077,12 @@ struct Router::Impl {
           ok = search_and_commit(st.c, false);
           if (!ok && (neck_width(st.c.net) > 0 || neck_via_diameter(st.c.net) < class_via_diameter(st.c.net))) {
             width_override = neck_width(st.c.net);
+            width_override_caps = true;  // a neck-down caps each layer's own width (issue 63)
             via_override = true;
             ok = search_and_commit(st.c, false);
             if (ok) ++res.necked;
             width_override = 0;
+            width_override_caps = false;
             via_override = false;
           }
           force_escapes = false;
@@ -8093,11 +8113,15 @@ struct Router::Impl {
           if (!ok && why.starts_with("boxed in")) {
             // Last check before giving the pin up: negotiated, with off-lattice escapes and the neck-down width.
             force_escapes = true;
-            if (neck_width(st.c.net) > 0) width_override = neck_width(st.c.net);
+            if (neck_width(st.c.net) > 0) {
+              width_override = neck_width(st.c.net);
+              width_override_caps = true;  // a neck-down caps each layer's own width (issue 63)
+            }
             via_override = true;
             ok = search_and_commit(st.c, true);
             if (ok) ++res.necked;
             width_override = 0;
+            width_override_caps = false;
             via_override = false;
             force_escapes = false;
             if (!ok && why.starts_with("boxed in")) {
