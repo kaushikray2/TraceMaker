@@ -72,6 +72,8 @@ add_test(NAME finish_rip_walls COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integ
 set_tests_properties(finish_rip_walls PROPERTIES SKIP_RETURN_CODE 77 LABELS "route;integration" TIMEOUT 1200 PROCESSORS 8)
 add_test(NAME pair_void COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration/pair_void.py $<TARGET_FILE:tracemaker> ${CMAKE_BINARY_DIR}/integration/pair_void)
 set_tests_properties(pair_void PROPERTIES SKIP_RETURN_CODE 77 LABELS "route;integration" TIMEOUT 600 PROCESSORS 8)
+add_test(NAME pair_micro COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration/pair_micro.py $<TARGET_FILE:tracemaker> ${CMAKE_BINARY_DIR}/integration/pair_micro)
+set_tests_properties(pair_micro PROPERTIES SKIP_RETURN_CODE 77 LABELS "route;integration" TIMEOUT 600 PROCESSORS 8)
 add_test(NAME chains_clique COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration/chains_clique.py $<TARGET_FILE:tracemaker> ${CMAKE_BINARY_DIR}/integration/chains_clique)
 set_tests_properties(chains_clique PROPERTIES SKIP_RETURN_CODE 77 LABELS "route;integration" TIMEOUT 1200 PROCESSORS 8)
 add_test(NAME chains_arcs COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration/chains_arcs.py $<TARGET_FILE:tracemaker> ${CMAKE_BINARY_DIR}/integration/chains_arcs)

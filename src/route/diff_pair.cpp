@@ -76,6 +76,14 @@ PairRule pair_rule(const model::Board& b, const model::DesignRules& rules, const
   r.via_offset = std::max({r.offset, ceil_half(r.via_diameter + vgap), ceil_half(r.via_drill + re.router_hole_to_hole()),
                            ceil_half(r.via_drill / 2 + r.via_diameter / 2 + re.router_hole_clearance())}) +
                  kRoundMargin;
+  // Micro vias (issue 38 item 2): the same spacing rule at the micro diameter, from the classes' microvia
+  // dimensions raised to the board minimums, as the router's own micro vias. Stays 0 when nothing defines them.
+  r.micro_drill = std::max({na.uvia_drill, nc.uvia_drill, m.microvia_drill});
+  r.micro_diameter = std::max({na.uvia_diameter, nc.uvia_diameter, m.microvia_diameter});
+  if (r.micro_diameter > 0)
+    r.micro_via_offset = std::max({r.offset, ceil_half(r.micro_diameter + vgap), ceil_half(r.micro_drill + re.router_hole_to_hole()),
+                                   ceil_half(r.micro_drill / 2 + r.micro_diameter / 2 + re.router_hole_clearance())}) +
+                         kRoundMargin;
   if (const auto k = re.net_constraint(a, "diff_pair_uncoupled"); k && k->max) r.max_uncoupled = *k->max;
   return r;
 }

@@ -3926,10 +3926,18 @@ struct Router::Impl {
     Coord w = 0;
     double len = 0;
   };
+  // A via of a routed pair half, with the span and type the search chose for its transition (issue 38 item 2):
+  // a coupled transition may be a through via, a blind/buried via over its span, or a micro via.
+  struct PairVia {
+    Point pos;
+    int top = 0, bot = 0;  // copper layers the via spans (top <= bot)
+    model::ViaType type = model::ViaType::Through;
+    Coord size = 0, drill = 0;
+  };
   struct PairHalf {
     NetId net = 0;
     std::vector<std::pair<int, PairSeg>> segs;  // (layer, segment)
-    std::vector<Point> vias;
+    std::vector<PairVia> vias;
   };
   std::string pair_why;
   std::string pair_tag;  // TM_DEBUG_PAIRS: which unhandled situation the last pair was in
@@ -4066,24 +4074,24 @@ struct Router::Impl {
   // half's coupled run near the far end of a short pair). Geometry only; the exact check follows.
   // `vm`: mask expansion of untented vias, which Obstacles adds between a via and other copper (once) or another via
   // (twice).
-  static bool halves_clear(const PairHalf& x, const PairHalf& y, Coord req, Coord vd, Coord vm) {
+  static bool halves_clear(const PairHalf& x, const PairHalf& y, Coord req, Coord vm) {
     for (const auto& [la, sa] : x.segs)
       for (const auto& [lb, sb] : y.segs)
         if (la == lb && geom::seg_seg_closer(sa.a, sa.b, sb.a, sb.b, (sa.w + sb.w) / 2 + req)) return false;
     const Coord req_vt = vm > 0 ? std::max(req, vm + 1'000) : req, req_vv = vm > 0 ? std::max(req, 2 * vm + 1'000) : req;
     for (const PairHalf* h : {&x, &y}) {
       const PairHalf* o = h == &x ? &y : &x;
-      for (const Point v : h->vias) {
+      for (const PairVia& v : h->vias) {
         for (const auto& [l, sg] : o->segs)
-          if (geom::point_seg_closer(v, sg.a, sg.b, vd / 2 + sg.w / 2 + req_vt)) return false;
-        for (const Point w : o->vias)
-          if (geom::point_seg_closer(v, w, w, vd + req_vv)) return false;
+          if (geom::point_seg_closer(v.pos, sg.a, sg.b, v.size / 2 + sg.w / 2 + req_vt)) return false;
+        for (const PairVia& w : o->vias)
+          if (geom::point_seg_closer(v.pos, w.pos, w.pos, (v.size + w.size) / 2 + req_vv)) return false;
       }
     }
     return true;
   }
 
-  void commit_half(int ci, const PairHalf& h, Coord vd, Coord vdrill) {
+  void commit_half(int ci, const PairHalf& h) {
     auto& st = cs[static_cast<std::size_t>(ci)];
     for (const auto& [layer, s] : h.segs) {
       b.tracks.push_back(model::Track{s.a, s.b, s.w, layer, h.net, false, sexpr::kNoNode});
@@ -4092,15 +4100,16 @@ struct Router::Impl {
       st.items.push_back(id);
       emit_track_add(static_cast<int>(b.tracks.size() - 1));
     }
-    for (const Point v : h.vias) {
-      b.vias.push_back(model::Via{v, vd, vdrill, 0, nl - 1, model::ViaType::Through, h.net, false, sexpr::kNoNode});
+    for (const PairVia& v : h.vias) {
+      b.vias.push_back(model::Via{v.pos, v.size, v.drill, v.top, v.bot, v.type, h.net, false, sexpr::kNoNode});
+      if (v.type == model::ViaType::Micro) ++res.micro_vias;
       const int id = obs->add_via(static_cast<int>(b.vias.size() - 1), ci);
       near_mark(id, +1);
       st.items.push_back(id);
       emit_via_add(static_cast<int>(b.vias.size() - 1));
     }
   }
-  bool half_legal(const PairHalf& h, Coord vd, Coord vdrill) const {
+  bool half_legal(const PairHalf& h) const {
     const bool dbg = std::getenv("TM_DEBUG_PAIRS") != nullptr;
     for (const auto& [layer, s] : h.segs)
       if (!tracks_ok(layer) || obs->segment_state(s.a, s.b, layer, s.w, h.net, false, nullptr) != 0) {
@@ -4109,9 +4118,10 @@ struct Router::Impl {
                        nm_to_mm(s.a.x), nm_to_mm(s.a.y), nm_to_mm(s.b.x), nm_to_mm(s.b.y), layer, nm_to_mm(s.w));
         return false;
       }
-    for (const Point v : h.vias)
-      if (obs->via_state(v, vd, vdrill, h.net, 0, false, nullptr) != 0) {
-        if (dbg) std::fprintf(stderr, "   pair half %s: via fails at %.4f %.4f\n", b.nets[static_cast<std::size_t>(h.net)].name.c_str(), nm_to_mm(v.x), nm_to_mm(v.y));
+    for (const PairVia& v : h.vias)
+      if ((v.type == model::ViaType::Through ? obs->via_state(v.pos, v.size, v.drill, h.net, 0, false, nullptr)
+                                             : obs->via_state_span(v.pos, v.size, v.drill, h.net, 0, false, nullptr, v.top, v.bot, v.type)) != 0) {
+        if (dbg) std::fprintf(stderr, "   pair half %s: via fails at %.4f %.4f\n", b.nets[static_cast<std::size_t>(h.net)].name.c_str(), nm_to_mm(v.pos.x), nm_to_mm(v.pos.y));
         return false;
       }
     return true;
@@ -4277,6 +4287,7 @@ struct Router::Impl {
       std::int32_t start;
       std::uint8_t move;
       bool closed;
+      std::uint8_t vkind = 0;  // a kVia node's transition: 0 = the standard span, 2 = micro vias (issue 38 item 2)
     };
     std::unordered_map<std::uint64_t, PN> nodes;
     nodes.reserve(1u << 15);
@@ -4382,12 +4393,13 @@ struct Router::Impl {
       }
       return pen;
     };
-    auto relax = [&](std::uint64_t k, std::int64_t g, std::uint64_t parent, std::int32_t start, std::uint8_t move, Point c, int l, int dd) {
+    auto relax = [&](std::uint64_t k, std::int64_t g, std::uint64_t parent, std::int32_t start, std::uint8_t move, Point c, int l, int dd,
+                     std::uint8_t vkind = 0) {
       g += void_cost(c, dd, l);
-      auto [it, fresh] = nodes.try_emplace(k, PN{g, parent, start, move, false});
+      auto [it, fresh] = nodes.try_emplace(k, PN{g, parent, start, move, false, vkind});
       if (!fresh) {
         if (it->second.closed || it->second.g <= g) return;
-        it->second = PN{g, parent, start, move, false};
+        it->second = PN{g, parent, start, move, false, vkind};
       }
       pq.push({g + hcost(c, l), seq++, 0, k});
     };
@@ -4405,6 +4417,16 @@ struct Router::Impl {
       }
       std::reverse(chain.begin(), chain.end());
       const Cand& st0 = starts[static_cast<std::size_t>(nodes.at(chain.front()).start)];
+      auto span_via = [&](Point V, const Dec& p, const Dec& q) {
+        PairVia pv;
+        pv.pos = V;
+        pv.top = std::min(p.l, q.l);
+        pv.bot = std::max(p.l, q.l);
+        pv.type = pv.top == 0 && pv.bot == nl - 1 ? model::ViaType::Through : model::ViaType::Blind;
+        pv.size = pr.via_diameter;
+        pv.drill = pr.via_drill;
+        return pv;
+      };
       for (const double sigma : {1.0, -1.0}) {
         const NetId net = net_of(sigma, st0.s);
         PairHalf& h = net == A.net ? ha : hb;
@@ -4429,12 +4451,21 @@ struct Router::Impl {
           if (mv == kTurn) to(miter_point(cp, p.dd, q.dd, sg * off), w);
           if (mv == kVia) {
             const Dir2 u = unit_dir(p.dd), n = left_normal(p.dd);
-            const Point V = offset_point(offset_point(cp, u, hj), n, sg * static_cast<double>(pr.via_offset));
+            const bool micro = nodes.at(chain[i]).vkind == 2;
+            const Coord voff = micro ? pr.micro_via_offset : pr.via_offset;
+            const double hjj = static_cast<double>(voff) - off;
+            const Point V = offset_point(offset_point(cp, u, hjj), n, sg * static_cast<double>(voff));
             to(offset_point(cp, n, sg * off), w);
             to(V, w);
-            h.vias.push_back(V);
+            PairVia pv = span_via(V, p, q);
+            if (micro) {
+              pv.type = model::ViaType::Micro;
+              pv.size = pr.micro_diameter;
+              pv.drill = pr.micro_drill;
+            }
+            h.vias.push_back(pv);
             layer = q.l;
-            to(offset_point(offset_point(cp, u, 2 * hj), n, sg * off), w);
+            to(offset_point(offset_point(cp, u, 2 * hjj), n, sg * off), w);
           }
           if (mv == kTwist) {
             const Dir2 u = unit_dir(p.dd), n = left_normal(p.dd);
@@ -4446,14 +4477,14 @@ struct Router::Impl {
               to(pt(hj + 1.5 * twD, -vo), w);
               const Point V = pt(hj + 2.0 * twD, -vo);
               to(V, w);
-              h.vias.push_back(V);
+              h.vias.push_back(span_via(V, p, q));
               layer = q.l;
               to(pt(twT, -off), w);
             } else {  // the right half: changes layer first, crosses on the new layer
               to(pt(0, -off), w);
               const Point V = pt(hj, -vo);
               to(V, w);
-              h.vias.push_back(V);
+              h.vias.push_back(span_via(V, p, q));
               layer = q.l;
               to(pt(hj + twD / 2, -vo), w);
               to(pt(hj + 1.5 * twD, off), w);
@@ -4524,11 +4555,11 @@ struct Router::Impl {
         ha = PairHalf{};
         hb = PairHalf{};
         build(cd, ha, hb);
-        if (!halves_clear(ha, hb, pr.required_gap, pr.via_diameter, obs->via_mask())) continue;
-        if (half_legal(ha, pr.via_diameter, pr.via_drill) && half_legal(hb, pr.via_diameter, pr.via_drill)) {
-          commit_half(ia, ha, pr.via_diameter, pr.via_drill);
-          if (half_legal(hb, pr.via_diameter, pr.via_drill)) {  // now against the first half too
-            commit_half(ib, hb, pr.via_diameter, pr.via_drill);
+        if (!halves_clear(ha, hb, pr.required_gap, obs->via_mask())) continue;
+        if (half_legal(ha) && half_legal(hb)) {
+          commit_half(ia, ha);
+          if (half_legal(hb)) {  // now against the first half too
+            commit_half(ib, hb);
             if (pair_split)  // the void audit, extended to pair paths (issue 38 item 1)
               for (const PairHalf* h : {&ha, &hb})
                 for (const auto& [layer, sg2] : h->segs) res.pair_void_samples += static_cast<long>(void_samples(layer, sg2.a, sg2.b));
@@ -4627,26 +4658,36 @@ struct Router::Impl {
           }
           if (good) relax(key(x.l, gx, gy, d2, x.s), g + K * steplen(d2, x.l) + bend_cost, q.id, -1, kTurn, c2, x.l, d2);
         }
-      // Coupled via pair: jog out to the via spacing, change layer, jog back, MV steps in all.
+      // Coupled via pair: jog out to the via spacing, change layer, jog back. A transition the board allows as
+      // micro vias (outer layer to the next, both nets, dimensions defined) is also tried at the micro spacing,
+      // which is tighter; the standard attempt is checked over the span the vias will actually occupy - a blind
+      // span where blind vias are allowed for both nets, the whole board otherwise (issue 38 item 2).
       if (vias_ok) {
-        int gx = x.gx, gy = x.gy;
-        delta(x.dd, MV, gx, gy);
-        if (in_win(gx, gy) && obs->inside_board(at(gx, gy), 0)) {
-          const Point c2 = at(gx, gy);
-          for (int l2 = 0; l2 < nl; ++l2) {
-            if (l2 == x.l) continue;
-            bool good = true;
+        for (int l2 = 0; l2 < nl; ++l2) {
+          if (l2 == x.l) continue;
+          const int lo = std::min(x.l, l2), hi = std::max(x.l, l2);
+          auto attempt = [&](Coord voff, Coord vd2, Coord vdr2, model::ViaType vt, std::uint8_t vkind) {
+            const double hj2 = static_cast<double>(voff) - off;
+            const int mv2 = std::max(1, static_cast<int>(std::ceil((2.0 * hj2 + fold) / static_cast<double>(pitch))));
+            int gx = x.gx, gy = x.gy;
+            delta(x.dd, mv2, gx, gy);
+            if (!in_win(gx, gy) || !obs->inside_board(at(gx, gy), 0)) return;
+            const Point c2 = at(gx, gy);
             for (const double sg : {1.0, -1.0}) {
-              if (!good) break;
               const NetId net = net_of(sg, x.s);
               const Point P = offset_point(c, n, sg * off);
-              const Point V = offset_point(offset_point(c, u, hj), n, sg * static_cast<double>(pr.via_offset));
-              const Point Q = offset_point(offset_point(c, u, 2 * hj), n, sg * off);
-              good = seg_ok(P, V, x.l, net) && obs->via_state(V, pr.via_diameter, pr.via_drill, net, 0, false, nullptr) == 0 && seg_ok(V, Q, l2, net) &&
-                     seg_ok(Q, offset_point(c2, n, sg * off), l2, net);
+              const Point V = offset_point(offset_point(c, u, hj2), n, sg * static_cast<double>(voff));
+              const Point Q = offset_point(offset_point(c, u, 2 * hj2), n, sg * off);
+              const int vs = vt == model::ViaType::Through ? obs->via_state(V, vd2, vdr2, net, 0, false, nullptr)
+                                                           : obs->via_state_span(V, vd2, vdr2, net, 0, false, nullptr, lo, hi, vt);
+              if (!(seg_ok(P, V, x.l, net) && vs == 0 && seg_ok(V, Q, l2, net) && seg_ok(Q, offset_point(c2, n, sg * off), l2, net))) return;
             }
-            if (good) relax(key(l2, gx, gy, x.dd, x.s), g + MV * steplen(x.dd, l2) + via_pair_cost, q.id, -1, kVia, c2, l2, x.dd);
-          }
+            relax(key(l2, gx, gy, x.dd, x.s), g + mv2 * steplen(x.dd, l2) + via_pair_cost, q.id, -1, kVia, c2, l2, x.dd, vkind);
+          };
+          if (pr.micro_diameter > 0 && micro_for(A.net) && micro_for(B.net) && micro_span(x.l, l2))
+            attempt(pr.micro_via_offset, pr.micro_diameter, pr.micro_drill, model::ViaType::Micro, 2);
+          attempt(pr.via_offset, pr.via_diameter, pr.via_drill,
+                  blind_for(A.net) && blind_for(B.net) ? model::ViaType::Blind : model::ViaType::Through, 0);
         }
       }
       // Twist: change layer and swap sides (the geometry is described where MT is defined).
@@ -4661,14 +4702,20 @@ struct Router::Impl {
           for (int l2 = 0; l2 < nl; ++l2) {
             if (l2 == x.l) continue;
             const Point VR = pt(hj, -vo), VL = pt(hj + 2.0 * twD, -vo);
+            const int tlo = std::min(x.l, l2), thi = std::max(x.l, l2);
+            const bool tblind = blind_for(A.net) && blind_for(B.net);
+            auto vstate = [&](Point V, NetId net) {
+              return tblind ? obs->via_state_span(V, pr.via_diameter, pr.via_drill, net, 0, false, nullptr, tlo, thi)
+                            : obs->via_state(V, pr.via_diameter, pr.via_drill, net, 0, false, nullptr);
+            };
             const bool good =
                 // right half
-                seg_ok(pt(0, -off), VR, x.l, nr_) && obs->via_state(VR, pr.via_diameter, pr.via_drill, nr_, 0, false, nullptr) == 0 &&
+                seg_ok(pt(0, -off), VR, x.l, nr_) && vstate(VR, nr_) == 0 &&
                 seg_ok(VR, pt(hj + twD / 2, -vo), l2, nr_) && seg_ok(pt(hj + twD / 2, -vo), pt(hj + 1.5 * twD, off), l2, nr_) &&
                 seg_ok(pt(hj + 1.5 * twD, off), pt(twT, off), l2, nr_) && seg_ok(pt(twT, off), offset_point(c2, n, off), l2, nr_) &&
                 // left half
                 seg_ok(pt(0, off), pt(hj + twD / 2, off), x.l, nl_) && seg_ok(pt(hj + twD / 2, off), pt(hj + 1.5 * twD, -vo), x.l, nl_) &&
-                seg_ok(pt(hj + 1.5 * twD, -vo), VL, x.l, nl_) && obs->via_state(VL, pr.via_diameter, pr.via_drill, nl_, 0, false, nullptr) == 0 &&
+                seg_ok(pt(hj + 1.5 * twD, -vo), VL, x.l, nl_) && vstate(VL, nl_) == 0 &&
                 seg_ok(VL, pt(twT, -off), l2, nl_) && seg_ok(pt(twT, -off), offset_point(c2, n, -off), l2, nl_);
             // Dearer than a plain via pair by its uncoupled length: used only where the pin order calls for it.
             if (good)

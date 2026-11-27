@@ -27,6 +27,8 @@ struct PairRule {
   Coord offset = 0;         // centreline to each track centre: (width + gap) / 2, rounded up, plus a rounding margin
   Coord via_diameter = 0, via_drill = 0;
   Coord via_offset = 0;     // centreline to each via centre in a coupled via pair (>= offset)
+  Coord micro_diameter = 0, micro_drill = 0;  // the classes' microvia dimensions at the board minimums; 0 = undefined
+  Coord micro_via_offset = 0;                 // centreline to each micro via centre: the via spacing rule at the micro diameter
   std::optional<Coord> max_uncoupled;  // per half, both ends together
   std::string source;       // "rule", "net class" or "clearance" (for the report)
 };
