@@ -4635,6 +4635,7 @@ struct Router::Impl {
     // at the tail included), taken when the first goal with victims is committed.
     TxnSnap neg_snap;
     bool neg_committed = false;
+    std::size_t neg_pending = 0;  // pending size before a negotiated rip: rip() queues its victims and their implicit dependents, and the queue is part of the transaction (issue 60)
     // Goal candidates wait in their own queue (by estimated total cost) and are checked in turn with the states: when
     // the best of them is no dearer than the best state, and at least every 16 expansions, so a found end is used
     // as soon as its legs are legal (the first legal goal is taken: pairs need to be legal, not optimal).
@@ -4719,6 +4720,11 @@ struct Router::Impl {
             // rule 4): snapshot, rip, commit the pair against the cleared board, re-route the
             // victims strictly; any failure restores the snapshot exactly and ends the attempt.
             neg_snap = txn_capture();
+            neg_pending = pending.size();
+            // Everything routed now, remembered: rip() also un-routes the connections a victim's net
+            // satisfies implicitly, and the recovery below must account for every one of them (issue 60).
+            std::vector<char> was_routed(cs.size());
+            for (std::size_t k = 0; k < cs.size(); ++k) was_routed[k] = cs[k].routed ? 1 : 0;
             for (const int v : victims) rip(v);
             bool placed = half_legal(ha) && half_legal(hb);
             if (placed) {
@@ -4746,19 +4752,57 @@ struct Router::Impl {
                 if (again) {
                   cs[static_cast<std::size_t>(v)].routed = true;
                   ++res.routed;
+                  release_escapes(v);  // the re-route spends the corridor rip() re-reserved (issue 60)
                 } else {
                   restored = false;
                   break;
                 }
+              }
+              if (restored) {
+                // The rips also un-routed implicit dependents of the victims' nets (issue 60): each one
+                // must be satisfied again - implicitly, if the victim's new copper joins it, else by a
+                // strict re-route - or the whole attempt rolls back. The tune room-for loop's pattern.
+                for (std::size_t k = 0; k < cs.size() && restored; ++k) {
+                  auto& st = cs[k];
+                  if (!was_routed[k] || st.routed || static_cast<int>(k) == ia || static_cast<int>(k) == ib) continue;
+                  if (out_of_budget()) {
+                    restored = false;
+                    break;
+                  }
+                  current = static_cast<int>(k);
+                  bool again = false;
+                  if (joined(static_cast<int>(k))) {
+                    st.implicit = again = true;
+                  } else {
+                    expansion_cap = opt.txn_cap;
+                    again = search_and_commit(st.c, false);
+                    expansion_cap = 0;
+                  }
+                  if (!again) {
+                    restored = false;
+                    break;
+                  }
+                  st.routed = true;
+                  ++res.routed;
+                  release_escapes(static_cast<int>(k));
+                }
+                if (restored)  // a recovery re-route may itself have displaced a connection the sweep already passed
+                  for (std::size_t k = 0; k < cs.size(); ++k)
+                    if (was_routed[k] && !cs[k].routed && static_cast<int>(k) != ia && static_cast<int>(k) != ib) {
+                      restored = false;
+                      break;
+                    }
               }
               current = saved_current;
               last_miss = saved_miss;
             }
             if (!restored) {
               txn_restore(neg_snap);
+              if (pending.size() > neg_pending) pending.resize(neg_pending);  // no stale queue entries from the rips (issue 60)
               pair_why = placed ? "a connection the pair displaced did not route again" : "negotiated pair failed its exact check after the rip";
               break;
             }
+            if (pending.size() > neg_pending) pending.resize(neg_pending);  // everything the rips queued is routed again: the queue returns to its pre-attempt contents (issue 60)
             neg_committed = true;
             done = true;
             break;
