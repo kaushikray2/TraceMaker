@@ -127,7 +127,7 @@ Options:
   --config TEXT:FILE          Read options from a file of `name = value` lines, as `tracemaker tui` saves them; options on the command line win
   -o,--output TEXT REQUIRED   Output .kicad_pcb
   --time FLOAT                Time limit, seconds (safety net; results then depend on machine speed)
-  --work INT                  Deterministic work budget in search expansions per router (e.g. 50000000); with the default portfolio every variant gets the whole budget, so a run does up to --variants times this work
+  --work INT                  Deterministic work budget in search expansions per router (e.g. 50000000); with the default portfolio every variant gets the whole budget, so a run does up to --variants times this work. Work accounting version 2: an expansion covers more than under version 1 (the upstream 0.12.1 accounting) - pair leg checks and the via-shove / pin-rescue work are folded into the count - so a budget calibrated under version 1 needs roughly twice the value for the same reach (measured on the Nomad reference fixture: the baseline that 20000000 met under version 1 needs 40000000 under version 2). --deterministic also suppresses the knowledge base, which changes the effective reach at the same budget. The accounting version is emitted as work_accounting_version in the route JSON.
   --pitch-um FLOAT            Lattice pitch in micrometres (default: automatic)
   --via-cost-mm FLOAT         Cost of a via as equivalent track length
   --seed UINT
