@@ -6778,6 +6778,7 @@ struct Router::Impl {
     reserve_pen = static_cast<std::int64_t>(2 * opt.soft_cost_mm * 1e6);
     res.escape_corridors = 0;
     res.escape_corridor_mm = 0;
+    res.escape_released_open = 0;  // issue 58: a re-plan restarts the release accounting with the corridors
     plan_json.clear();
     auto mark = [&](std::size_t gi, NetId net, int pad) {
       if (reserve[gi] == 0) {
@@ -7055,7 +7056,7 @@ struct Router::Impl {
       }
     }
     for (std::size_t pad = 0; pad < b.pads.size(); ++pad) {
-      if (served[pad] || pad_reserved[pad].empty() || pad_net[pad] <= 0) continue;
+      if (served[pad] || pad_net[pad] <= 0 || (pad_reserved[pad].empty() && (vreserve.empty() || pad_vreserved[pad].empty()))) continue;  // issue 58: a pad holding only via-keep cells still has something to give back
       release_pad(static_cast<int>(pad), pad_net[pad]);
       ++res.escape_released_open;
     }
@@ -7589,7 +7590,7 @@ struct Router::Impl {
     int run_best = -1, run_best_pass = 0;  // best routed count since this restart began, and the pass that set it
     for (int pass = 0; pass < opt.max_passes && !pending.empty() && !out_of_budget(); ++pass) {
       res.passes = pass + 1;
-      if (pass == 1 && opt.escape_release_open) release_open_escapes();  // issue 39: still-open pins give their corridors back
+      if (pass == 1 && opt.escape_release_open) release_open_escapes();  // issue 39: still-open pins give their corridors back, after the first pass whatever kind it was (issue 58: under --warm or --no-strict-first pass 0 is already negotiated, and the release still waits one full pass so the corridors can serve it)
       strict_pass = pass == 0 && opt.strict_first && !opt.warm;
       if (opt.fanout_hold && !pad_stub.empty()) {
         if (strict_pass) place_holds();

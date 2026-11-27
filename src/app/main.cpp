@@ -1464,7 +1464,7 @@ static int run_main(int argc, char** argv) {
   route->add_flag("--finish-guard-walls", r_finish_guard_walls,
                   "With --finish: keep a routing rung only when open + walled-in pins improves (DR-22: a rung's own copper can wall the pins it leaves open in, and no later rung can reach a walled pin; priced from a wall proof over each rung's output board, computed even with --no-why-open). Chains rungs are not priced; a kept one re-prices the best board");
   route->add_flag("--finish-rip-walls", r_finish_rip_walls,
-                  "With --finish: after the rungs, free pins the best board walls in with its own routed copper (DR-22 Tier 2-prime): proof the best board, rip exactly the tracks, arcs and vias the proof names (locked copper is never ripped), route the opened connections on top, and keep a round only when open + walled improves; at most 4 rounds");
+                  "With --finish: after the rungs, free pins the best board walls in with its own routed copper (DR-22 Tier 2-prime): proof the best board, rip exactly the tracks, arcs and vias the proof names (locked copper is never ripped), route the opened connections on top, and keep a round only when (open, walled) improves lexicographically (issue 57); at most 4 rounds");
   route->add_option("--finish-layers", r_finish_layers, "With --finish: later rungs that add this many copper layers to the board's count (e.g. 2,4); none by default")
       ->delimiter(',');
   route->add_option("--try-layers", r_try_layers,

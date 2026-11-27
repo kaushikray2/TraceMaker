@@ -55,8 +55,16 @@ def main():
         outs.append((out, s))
         check(s.get("escape_released_open", 0) >= 1,
               f"{tag}: the release never fired ({s.get('escape_released_open')})")
+        check(s.get("escape_released_open", 0) <= s.get("escape_corridors", 0),
+              f"{tag}: released exceeds corridors: the counter accumulated across restarts (issue 58)")
         check(s["connections"] - s["routed"] <= base_open,
               f"{tag}: released run left more open ({s['connections'] - s['routed']}) than the held run ({base_open})")
+    # Via-keep arm (issue 58): with via reservations in play the release accounting must stay
+    # consistent - a pad holding only via-keep cells is releasable too.
+    _, vk = route(tm, work, "viakeep", "--escape-release-open", "--escape-via-keep", "0.5")
+    check(vk.get("escape_released_open", 0) <= vk.get("escape_corridors", 0),
+          f"viakeep: released ({vk.get('escape_released_open')}) exceeds corridors ({vk.get('escape_corridors')})")
+
     h = [hashlib.sha256(o.read_bytes()).hexdigest() for o, _ in outs]
     check(h[0] == h[1], "release runs differ: the release is not deterministic")
     print(f"PASS escape_release: corridors {base['escape_corridors']}, "
