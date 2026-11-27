@@ -1204,7 +1204,7 @@ struct Router::Impl {
     // A class carrying per-layer maps (issue 37) keeps its own cache even when its scalars match
     // another class's: its codes are computed per layer from the map, so sharing by scalar values
     // would mix two different legality pictures.
-    const bool per_class = class_names_seen || !nc.track_width_on.empty() || !nc.diff_pair_width_on.empty() || !nc.diff_pair_gap_on.empty();
+    const bool per_class = class_names_seen || !nc.track_width_on.empty() || !nc.diff_pair_width_on.empty() || !nc.diff_pair_gap_on.empty() || !nc.tuning_profile.empty();  // width_on reads tuning-profile widths too (issue 59): the key must cover everything width_on reads, not rely on the project reader's implicit tuning rules setting class_names_seen  // width_on reads tuning-profile widths too (issue 59): the key must cover everything width_on reads, not rely on the project reader's implicit tuning rules setting class_names_seen
     auto& cc = caches[{per_class ? &nc : nullptr, nc.clearance, nc.diff_pair_gap, nc.tuning_pair_gap, track_width(net), via_diameter(net), via_drill(net)}];
     if (cc.margin.empty()) {
       const std::size_t n = static_cast<std::size_t>(nl) * static_cast<std::size_t>(nx) * static_cast<std::size_t>(ny);

@@ -830,6 +830,46 @@ TEST_CASE("obstacle caches: classes with the same values share one, and the memo
   CHECK(tight.cache_evictions == again.cache_evictions);
 }
 
+TEST_CASE("obstacle caches: a class with a tuning profile keeps its own cache even with equal scalars", "[route]") {
+  // Issue #59: width_on reads single-ended tuning-profile widths per layer, so a profiled class must not share a
+  // ClassCache with a scalar-equal class - the cached codes are computed at the first net's half-width. Through the
+  // project reader this is masked today (add_tuning_rules synthesises hasExactNetclass rules for the profile's
+  // layers, which sets class_names_seen); built by hand here, no such rule exists, and the key itself must separate them.
+  auto run = [](const Files& f, bool profiled) {
+    const auto lb = io::read_board_file(f.pcb.string());
+    auto rules = io::read_design_rules(f.pcb.string());
+    model::NetClass other = rules.default_class();
+    other.name = "Other";
+    rules.classes.push_back(other);
+    rules.assignments["SIG"] = {"Other"};
+    if (profiled) {
+      model::TuningProfile p;
+      p.name = "P1";
+      p.differential = false;
+      p.layers.push_back({"F.Cu", 150'000, 0, 0});
+      p.layers.push_back({"B.Cu", 300'000, 0, 0});
+      rules.tuning_profiles.push_back(std::move(p));
+      rules.classes.back().tuning_profile = "P1";
+    }
+    route::RouterOptions o;
+    o.work_budget = 2'000'000;
+    o.gpu_device = -1;
+    o.time_limit_s = 600;
+    return route::Router(lb.board, rules, o).run();
+  };
+  const std::string board = board_text(
+      "  (footprint \"R\" (layer \"F.Cu\") (at 10 5)\n    (property \"Reference\" \"R3\" (at 0 0) (layer \"F.SilkS\"))\n"
+      "    (pad \"1\" smd rect (at 0 -2) (size 1 1) (layers \"F.Cu\") (net 1 \"SIG\"))\n"
+      "    (pad \"2\" smd rect (at 0 2) (size 1 1) (layers \"F.Cu\") (net 2 \"GND\"))\n  )\n");
+  const Files f("class_cache_profile", board, "");
+  const auto plain = run(f, false);
+  REQUIRE(plain.routed == 4);
+  CHECK(plain.obstacle_caches == 1);  // equal scalars, no profile: one shared cache, as before
+  const auto prof = run(f, true);
+  REQUIRE(prof.routed == 4);
+  CHECK(prof.obstacle_caches == 2);  // the profile's per-layer widths get a cache of their own
+}
+
 TEST_CASE("inside board: the exact test by raster-row edges equals the every-edge reference", "[geom][route]") {
   // A toothed outline (many edges, some horizontal and some on raster-row boundaries) round the board, the board's own
   // rectangle and a round hole as cut-outs.

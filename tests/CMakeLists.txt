@@ -177,3 +177,5 @@ add_test(NAME live_status COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integratio
 set_tests_properties(live_status PROPERTIES LABELS "integration" TIMEOUT 120)
 add_test(NAME perlayer_widths COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration/perlayer_widths.py $<TARGET_FILE:tracemaker> ${CMAKE_BINARY_DIR}/integration/perlayer)
 set_tests_properties(perlayer_widths PROPERTIES LABELS "route;integration" TIMEOUT 300)
+add_test(NAME cache_profile COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration/cache_profile.py $<TARGET_FILE:tracemaker> ${CMAKE_BINARY_DIR}/integration/cache_profile)
+set_tests_properties(cache_profile PROPERTIES LABELS "route;integration" TIMEOUT 300)
