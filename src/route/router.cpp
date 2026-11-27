@@ -4120,18 +4120,27 @@ struct Router::Impl {
   // half's coupled run near the far end of a short pair). Geometry only; the exact check follows.
   // `vm`: mask expansion of untented vias, which Obstacles adds between a via and other copper (once) or another via
   // (twice).
-  static bool halves_clear(const PairHalf& x, const PairHalf& y, Coord req, Coord vm) {
+  static bool halves_clear(const PairHalf& x, const PairHalf& y, const std::vector<PairRule>& prl, Coord vm) {
+    // Each same-layer segment pair is judged by that layer's own required gap (issue 61).
     for (const auto& [la, sa] : x.segs)
       for (const auto& [lb, sb] : y.segs)
-        if (la == lb && geom::seg_seg_closer(sa.a, sa.b, sb.a, sb.b, (sa.w + sb.w) / 2 + req)) return false;
-    const Coord req_vt = vm > 0 ? std::max(req, vm + 1'000) : req, req_vv = vm > 0 ? std::max(req, 2 * vm + 1'000) : req;
+        if (la == lb &&
+            geom::seg_seg_closer(sa.a, sa.b, sb.a, sb.b, (sa.w + sb.w) / 2 + prl[static_cast<std::size_t>(la)].required_gap))
+          return false;
+    auto req_vt = [&](Coord req) { return vm > 0 ? std::max(req, vm + 1'000) : req; };
+    auto req_vv = [&](Coord req) { return vm > 0 ? std::max(req, 2 * vm + 1'000) : req; };
     for (const PairHalf* h : {&x, &y}) {
       const PairHalf* o = h == &x ? &y : &x;
       for (const PairVia& v : h->vias) {
         for (const auto& [l, sg] : o->segs)
-          if (geom::point_seg_closer(v.pos, sg.a, sg.b, v.size / 2 + sg.w / 2 + req_vt)) return false;
-        for (const PairVia& w : o->vias)
-          if (geom::point_seg_closer(v.pos, w.pos, w.pos, (v.size + w.size) / 2 + req_vv)) return false;
+          if (geom::point_seg_closer(v.pos, sg.a, sg.b, v.size / 2 + sg.w / 2 + req_vt(prl[static_cast<std::size_t>(l)].required_gap)))
+            return false;
+        for (const PairVia& w : o->vias) {
+          Coord req = 0;  // the strictest required gap over the layers either via spans
+          for (int l = std::min(v.top, v.bot); l <= std::max(v.top, v.bot); ++l) req = std::max(req, prl[static_cast<std::size_t>(l)].required_gap);
+          for (int l = std::min(w.top, w.bot); l <= std::max(w.top, w.bot); ++l) req = std::max(req, prl[static_cast<std::size_t>(l)].required_gap);
+          if (geom::point_seg_closer(v.pos, w.pos, w.pos, (v.size + w.size) / 2 + req_vv(req))) return false;
+        }
       }
     }
     return true;
@@ -4445,18 +4454,18 @@ struct Router::Impl {
       const model::Pad& qb = at_start ? pb1 : pb2;
       const auto la = pair_leg(qa.pos, XA, a, n, cd.l, A.net, wl(cd.l), leg_checks, std::max(qa.size_x, qa.size_y) / 2);
       const auto lb = la ? pair_leg(qb.pos, XB, a, n, cd.l, B.net, wl(cd.l), leg_checks, std::max(qb.size_x, qb.size_y) / 2) : std::nullopt;
-      if (dbg_legs > 0 && !at_start && (!la || !lb || !legs_clear(*la, *lb, pr.required_gap))) {
+      if (dbg_legs > 0 && !at_start && (!la || !lb || !legs_clear(*la, *lb, prl[static_cast<std::size_t>(cd.l)].required_gap))) {
         --dbg_legs;
         const Point pA = (at_start ? pa1 : pa2).pos, pB = (at_start ? pb1 : pb2).pos;
         std::fprintf(stderr, "   end legs fail (%s): dir %d layer %d c (%.3f,%.3f) padA (%.3f,%.3f) XA (%.3f,%.3f) padB (%.3f,%.3f) XB (%.3f,%.3f)\n",
                      !la ? "A" : !lb ? "B" : "clear", cd.dd, cd.l, nm_to_mm(c.x), nm_to_mm(c.y), nm_to_mm(pA.x), nm_to_mm(pA.y), nm_to_mm(XA.x), nm_to_mm(XA.y),
                      nm_to_mm(pB.x), nm_to_mm(pB.y), nm_to_mm(XB.x), nm_to_mm(XB.y));
       }
-      if (!la || !lb || !legs_clear(*la, *lb, pr.required_gap)) return false;
+      if (!la || !lb || !legs_clear(*la, *lb, prl[static_cast<std::size_t>(cd.l)].required_gap)) return false;
       // Each leg against the other half's straight run next to the candidate (K steps are straight at both ends).
       const double run = static_cast<double>(K * pitch) * (at_start ? 1.0 : -1.0);
-      if (!legs_clear(*la, PairLeg{{XB, offset_point(XB, u, run)}, wl(cd.l), 0}, pr.required_gap) ||
-          !legs_clear(*lb, PairLeg{{XA, offset_point(XA, u, run)}, wl(cd.l), 0}, pr.required_gap))
+      if (!legs_clear(*la, PairLeg{{XB, offset_point(XB, u, run)}, wl(cd.l), 0}, prl[static_cast<std::size_t>(cd.l)].required_gap) ||
+          !legs_clear(*lb, PairLeg{{XA, offset_point(XA, u, run)}, wl(cd.l), 0}, prl[static_cast<std::size_t>(cd.l)].required_gap))
         return false;
       cd.la = *la;
       cd.lb = *lb;
@@ -4668,7 +4677,7 @@ struct Router::Impl {
         ha = PairHalf{};
         hb = PairHalf{};
         build(cd, ha, hb);
-        if (!halves_clear(ha, hb, pr.required_gap, obs->via_mask())) continue;
+        if (!halves_clear(ha, hb, prl, obs->via_mask())) continue;
         if (negotiate) {
           // Exact victim collection over the built halves, legs included: the search's soft
           // legality was approximate (it prices crossings, it does not record them), so this pass

@@ -2408,7 +2408,10 @@ RouteJobResult run_route_job(RouteJob job) {
     out.summary["pair_void_samples"] = res.pair_void_samples;
     for (const auto& [na, nb] : want) {
       const auto pr = route::pair_rule(lb.board, rules, re, na, nb);
-      const auto st = route::measure_pair(res.tracks, res.vias, na, nb, route::coupled_threshold(pr));
+      std::vector<Coord> thr_on;  // per-layer coupled thresholds (issue 61)
+      for (int l = 0; l < lb.board.copper_count(); ++l)
+        thr_on.push_back(route::coupled_threshold(route::pair_rule(lb.board, rules, re, na, nb, 0, lb.board.copper_name(l))));
+      const auto st = route::measure_pair(res.tracks, res.vias, na, nb, thr_on, route::coupled_threshold(pr));
       const std::string& a = lb.board.nets[static_cast<std::size_t>(na)].name;
       const std::string& b = lb.board.nets[static_cast<std::size_t>(nb)].name;
       log(fmt("  %s / %s: %.1f mm, coupled %.0f %%, gap %.3f mm (target %.3f, %s), skew %.3f mm, vias %d/%d", a.c_str(), b.c_str(),

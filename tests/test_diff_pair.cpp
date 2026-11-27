@@ -481,3 +481,45 @@ TEST_CASE("pair search: a coupled run uses the width of the layer it is on (issu
   CHECK(in1 > 0);
   CHECK(fcu > 0);
 }
+
+TEST_CASE("pair rule: a tighter per-layer gap is floored by its own required gap (issue 61)", "[diffpair]") {
+  auto r = rules_with(300'000, true, 150'000, 300'000);
+  r.classes[0].diff_pair_gap_on = {{"In1.Cu", 120'000}};
+  r.minimums.clearance = 50'000;
+  const auto b = two_nets("/TMDS_0_P", "/TMDS_0_N");
+  const drc::RuleEngine re(b, r);
+  const auto scalar = route::pair_rule(b, r, re, 1, 2);
+  CHECK(scalar.gap == 300'000);
+  CHECK(scalar.required_gap == 300'000);
+  const auto in1 = route::pair_rule(b, r, re, 1, 2, 0, "In1.Cu");
+  CHECK(in1.gap == 120'000);           // the layer's tighter gap survives (was clamped to 300'000)
+  CHECK(in1.required_gap == 120'000);  // and the required gap halves_clear judges by is the layer's
+  CHECK(2 * in1.offset - in1.width >= in1.gap);
+  const auto f = route::pair_rule(b, r, re, 1, 2, 0, "F.Cu");
+  CHECK(f.gap == 300'000);  // a layer without an entry keeps the scalar rule
+  CHECK(f.required_gap == 300'000);
+}
+
+TEST_CASE("pair measurement: the coupled threshold is the layer's own (issue 61)", "[diffpair]") {
+  std::vector<model::Track> t;
+  // Two parallel 10 mm tracks on layer 1, 0.25 mm wide, edges 0.19 mm apart.
+  t.push_back({{0, 0}, {10'000'000, 0}, 250'000, 1, 1, false, sexpr::kNoNode});
+  t.push_back({{0, 440'000}, {10'000'000, 440'000}, 250'000, 1, 2, false, sexpr::kNoNode});
+  // Layer 1's threshold (0.17) is below the actual gap: not coupled there.
+  const auto on = route::measure_pair(t, {}, 1, 2, std::vector<Coord>{300'000, 170'000}, 300'000);
+  CHECK(on.coupled_a == 0);
+  CHECK(on.coupled_b == 0);
+  // The scalar threshold alone (0.30) would call the same geometry coupled.
+  const auto scalar = route::measure_pair(t, {}, 1, 2, 300'000);
+  CHECK(scalar.coupled_a >= 10e6 - 1e4);
+  // The same geometry on layer 0, whose threshold is 0.30, is coupled.
+  for (auto& tr : t) tr.layer = 0;
+  const auto l0 = route::measure_pair(t, {}, 1, 2, std::vector<Coord>{300'000, 170'000}, 300'000);
+  CHECK(l0.coupled_a >= 10e6 - 1e4);
+}
+
+// Issue 61 has no route-level fixture: a pair coupled at a tighter per-layer gap is still
+// rejected by the exact check, whose half-vs-half clearance comes from RuleEngine::clearance -
+// scalar by design (it mirrors KiCad, which has no per-layer gap). The in-scope parts (the
+// pair_rule floor, halves_clear's per-layer required gap, measure_pair's per-layer thresholds)
+// are pinned by the two unit tests above.

@@ -65,6 +65,10 @@ struct PairStats {
 inline Coord coupled_threshold(const PairRule& r) { return r.gap + std::max<Coord>(r.gap / 4, 50'000); }
 PairStats measure_pair(const std::vector<model::Track>& tracks, const std::vector<model::Via>& vias, model::NetId a, model::NetId c,
                        Coord coupled_gap);
+// Per-layer thresholds (issue 61): a sample counts as coupled against the threshold of the copper layer
+// index it runs on; layers without an entry (or a zero entry) fall back to the scalar threshold.
+PairStats measure_pair(const std::vector<model::Track>& tracks, const std::vector<model::Via>& vias, model::NetId a, model::NetId c,
+                       const std::vector<Coord>& coupled_gap_on, Coord coupled_gap);
 
 // Net pairs KiCad treats as differential pairs (names ending in P/N or +/-), in net order.
 std::vector<std::pair<model::NetId, model::NetId>> named_pairs(const model::Board& b, const drc::RuleEngine& re);

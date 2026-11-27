@@ -446,7 +446,10 @@ int cmd_pairs(const std::string& path, const std::vector<std::string>& extra, co
   std::printf("%-28s %9s %9s %8s %9s %9s %8s %5s\n", "pair", "len_mm", "coupled", "gap_mm", "gap_min", "target", "skew_mm", "vias");
   for (const auto& [na, nb] : pairs) {
     const auto pr = tmk::route::pair_rule(b, rules, obs.rules(), na, nb);
-    const auto st = tmk::route::measure_pair(b.tracks, b.vias, na, nb, tmk::route::coupled_threshold(pr));
+    std::vector<tmk::Coord> thr_on;  // per-layer coupled thresholds (issue 61)
+    for (int l = 0; l < b.copper_count(); ++l)
+      thr_on.push_back(tmk::route::coupled_threshold(tmk::route::pair_rule(b, rules, obs.rules(), na, nb, 0, b.copper_name(l))));
+    const auto st = tmk::route::measure_pair(b.tracks, b.vias, na, nb, thr_on, tmk::route::coupled_threshold(pr));
     const std::string name = b.nets[static_cast<std::size_t>(na)].name + " / " + b.nets[static_cast<std::size_t>(nb)].name;
     std::printf("%-28s %9.2f %8.1f%% %8.3f %9.3f %9.3f %8.3f %2d/%-2d\n", name.c_str(), (st.length_a + st.length_b) / 2e6, 100 * st.coupled_share(),
                 st.gap_median / 1e6, st.gap_min / 1e6, tmk::nm_to_mm(pr.gap), st.skew() / 1e6, st.vias_a, st.vias_b);
