@@ -20,6 +20,7 @@
 #include "passes/stitch.hpp"
 #include "passes/style.hpp"
 #include "passes/octilinear.hpp"
+#include "passes/optimize.hpp"
 #include "passes/widen.hpp"
 #include "route/obstacles.hpp"
 
@@ -773,4 +774,99 @@ TEST_CASE("octilinear: short legs and acute corners are not made", "[passes][oct
   t = {track(pt(5, 10), pt(15, 14), 2), track(pt(5, 10), pt(9, 12), 2)};
   r = passes::octilinear_tracks(l.board, l.rules, t, {}, {});
   CHECK(r.acute >= 1);
+}
+
+// ------------------------------------------------------------------------------------ optimize (issue #67)
+
+namespace {
+model::Via via_at(double x, double y, model::NetId net = 2) {
+  model::Via v;
+  v.pos = pt(x, y);
+  v.size = 600'000;
+  v.drill = 300'000;
+  v.layer_top = 0;
+  v.layer_bottom = 1;
+  v.net = net;
+  return v;
+}
+}  // namespace
+
+TEST_CASE("optimize: collinear tracks meeting at a free vertex merge into one", "[passes][optimize]") {
+  const auto l = load("opt_merge", board_text(""));
+  std::vector<model::Track> tracks{track(pt(5, 10), pt(10, 10), 2), track(pt(10, 10), pt(25, 10), 2)};
+  std::vector<model::Via> vias;
+  const auto r = passes::optimize_copper(l.board, l.rules, tracks, vias, {});
+  CHECK(r.merged == 1);
+  REQUIRE(tracks.size() == 1);
+  CHECK(tracks[0].a == pt(5, 10));
+  CHECK(tracks[0].b == pt(25, 10));
+  model::Board bd = l.board;
+  bd.tracks = tracks;
+  CHECK(unconnected(bd, l.rules) == 0);
+  CHECK(errors(bd, l.rules) == 0);
+}
+
+TEST_CASE("optimize: a vertex with a via or a third track is not merged", "[passes][optimize]") {
+  const auto l = load("opt_merge_no", board_text(""));
+  std::vector<model::Track> tracks{track(pt(5, 10), pt(10, 10), 2), track(pt(10, 10), pt(25, 10), 2)};
+  std::vector<model::Via> vias{via_at(10, 10)};
+  const auto r = passes::optimize_copper(l.board, l.rules, tracks, vias, {});
+  CHECK(r.merged == 0);
+  CHECK(tracks.size() == 2);
+  std::vector<model::Track> t3{track(pt(5, 10), pt(10, 10), 2), track(pt(10, 10), pt(25, 10), 2), track(pt(10, 10), pt(10, 15), 2)};
+  std::vector<model::Via> v3;
+  const auto r3 = passes::optimize_copper(l.board, l.rules, t3, v3, {});
+  CHECK(r3.merged == 0);
+  CHECK(t3.size() == 3);
+}
+
+TEST_CASE("optimize: a via jog collapses onto one layer and the run merges straight", "[passes][optimize]") {
+  const auto l = load("opt_jog", board_text(""));
+  std::vector<model::Track> tracks{track(pt(5, 10), pt(12, 10), 2, 250'000, 0), track(pt(12, 10), pt(15, 10), 2, 250'000, 1),
+                                   track(pt(15, 10), pt(25, 10), 2, 250'000, 0)};
+  std::vector<model::Via> vias{via_at(12, 10), via_at(15, 10)};
+  const auto r = passes::optimize_copper(l.board, l.rules, tracks, vias, {});
+  CHECK(r.collapsed == 1);
+  CHECK(vias.empty());
+  REQUIRE(tracks.size() == 1);
+  CHECK(tracks[0].a == pt(5, 10));
+  CHECK(tracks[0].b == pt(25, 10));
+  CHECK(tracks[0].layer == 0);
+  model::Board bd = l.board;
+  bd.tracks = tracks;
+  bd.vias = vias;
+  CHECK(unconnected(bd, l.rules) == 0);
+  CHECK(errors(bd, l.rules) == 0);
+}
+
+TEST_CASE("optimize: a jog whose replacement crosses another net stays", "[passes][optimize]") {
+  const auto l = load("opt_jog_blocked", board_text(seg(13.5, 8, 13.5, 12, 3, 0.2, "F.Cu")));
+  std::vector<model::Track> tracks{track(pt(5, 10), pt(12, 10), 2, 250'000, 0), track(pt(12, 10), pt(15, 10), 2, 250'000, 1),
+                                   track(pt(15, 10), pt(25, 10), 2, 250'000, 0)};
+  std::vector<model::Via> vias{via_at(12, 10), via_at(15, 10)};
+  const auto r = passes::optimize_copper(l.board, l.rules, tracks, vias, {});
+  CHECK(r.jogs == 1);
+  CHECK(r.no_room == 1);
+  CHECK(r.collapsed == 0);
+  CHECK(vias.size() == 2);
+}
+
+TEST_CASE("optimize: a via on a pad, and a locked via, are never collapsed", "[passes][optimize]") {
+  const std::string pad_on_via = "  (footprint \"T:P\" (layer \"F.Cu\") (at 12 10) (property \"Reference\" \"R3\")\n"
+                                 "    (pad \"1\" smd rect (at 0 0) (size 2 2) (layers \"F.Cu\") (net 2 \"P\")))\n";
+  const auto l = load("opt_jog_pad", board_text(pad_on_via));
+  std::vector<model::Track> tracks{track(pt(5, 10), pt(12, 10), 2, 250'000, 0), track(pt(12, 10), pt(15, 10), 2, 250'000, 1),
+                                   track(pt(15, 10), pt(25, 10), 2, 250'000, 0)};
+  std::vector<model::Via> vias{via_at(12, 10), via_at(15, 10)};
+  const auto r = passes::optimize_copper(l.board, l.rules, tracks, vias, {});
+  CHECK(r.collapsed == 0);
+  CHECK(vias.size() == 2);
+  const auto l2 = load("opt_jog_locked", board_text(""));
+  std::vector<model::Via> vias2{via_at(12, 10), via_at(15, 10)};
+  vias2[0].locked = true;
+  std::vector<model::Track> tracks2{track(pt(5, 10), pt(12, 10), 2, 250'000, 0), track(pt(12, 10), pt(15, 10), 2, 250'000, 1),
+                                    track(pt(15, 10), pt(25, 10), 2, 250'000, 0)};
+  const auto r2 = passes::optimize_copper(l2.board, l2.rules, tracks2, vias2, {});
+  CHECK(r2.collapsed == 0);
+  CHECK(vias2.size() == 2);
 }

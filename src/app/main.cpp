@@ -1578,6 +1578,7 @@ static int run_main(int argc, char** argv) {
                   "allows and no corner turns acute (doc 05 §80)");
   route->add_option("--octilinear-min-leg", r_job.octilinear_min_leg, "With --octilinear: the shortest leg a dogleg may have, in track widths (default 0.5; 0 = any)")
       ->check(CLI::Range(0.0, 20.0));
+  route->add_flag("--optimize-copper", r_job.optimize_copper, "Post-route optimisation (Phase 4A): collapse via jogs and merge collinear tracks in the new copper; kept only if no net gains unconnected items");
   route->add_option("--widen-net", r_job.widen_nets, "With --widen-power: target width for nets as PATTERN=WIDTH_MM, e.g. '+5V=0.8' or 'VBUS*=1' (repeatable)");
   route->add_option("--stitch-vias", r_job.stitch_vias,
                     "After routing: add stitching vias. planes: vias of a plane's net on a grid where its fills overlap on two or more layers; "

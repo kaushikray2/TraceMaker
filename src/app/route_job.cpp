@@ -64,6 +64,7 @@
 #include "passes/stitch.hpp"
 #include "passes/style.hpp"
 #include "passes/octilinear.hpp"
+#include "passes/optimize.hpp"
 #include "passes/widen.hpp"
 #include "report/render.hpp"
 #include "report/run_report.hpp"
@@ -1856,7 +1857,7 @@ RouteJobResult run_route_job(RouteJob job) {
   // After-route passes (doc 05 §39). Each works on the routed copper as a transaction: its result is judged by
   // the number of unconnected items (after a refill when fills are soft or vias were added) and dropped if that
   // number went up.
-  nlohmann::json widen_summary, stitch_summary, octilinear_summary;
+  nlohmann::json widen_summary, stitch_summary, octilinear_summary, optimize_summary;
   bool plane_zones = false;
   for (const auto& z : route_board->zones) plane_zones = plane_zones || (!z.rule_area && z.net > 0);
   const bool si_stitch = job.si_rules && job.si_stitch && !critical.empty() && plane_zones && route_board->copper_count() > 1;
@@ -2089,6 +2090,25 @@ RouteJobResult run_route_job(RouteJob job) {
         if (unconnected_after_refill >= 0) out.unconnected_after_refill = unconnected_after_refill = after;
       }
       if (opt.sink) opt.sink->publish(server::stage("stitch", "end", fmt("%d vias added", grid + ret)));
+    }
+    if (job.optimize_copper) {  // Phase 4A (issue #67): via-jog collapse and collinear merge on the final copper
+      passes::OptimizeOptions oo;
+      oo.soft_zones = opt.soft_zones;
+      oo.work_limit = job.pass_work;
+      auto opt_tracks = res.tracks;
+      auto opt_vias = res.vias;
+      const auto orr = passes::optimize_copper(*route_board, rules, opt_tracks, opt_vias, oo);
+      bool kept = orr.collapsed > 0 || orr.merged > 0;
+      if (kept) kept = no_worse(judge(res.tracks, res.vias, opt.soft_zones), judge(opt_tracks, opt_vias, opt.soft_zones));
+      log(fmt("optimize-copper: %d collinear merges, %d of %d via jogs collapsed (%d refused by the exact check), %ld checks%s%s",
+              orr.merged, orr.collapsed, orr.jogs, orr.no_room, orr.checks, orr.out_of_work ? " (work budget used up)" : "",
+              (orr.collapsed > 0 || orr.merged > 0) && !kept ? "; discarded: a net has more unconnected items with it" : ""));
+      optimize_summary = {{"merged", kept ? orr.merged : 0}, {"jogs", orr.jogs}, {"collapsed", kept ? orr.collapsed : 0},
+                          {"no_room", orr.no_room}, {"checks", orr.checks}, {"out_of_work", orr.out_of_work}, {"kept", kept}};
+      if (kept) {
+        res.tracks = std::move(opt_tracks);
+        res.vias = std::move(opt_vias);
+      }
     }
   }
   nlohmann::json pour_summary;
@@ -2400,6 +2420,7 @@ RouteJobResult run_route_job(RouteJob job) {
   if (!cr_classes.empty()) out.summary["component_rule_net_classes"] = cr_classes;
   if (!widen_summary.is_null()) out.summary["widen"] = widen_summary;
   if (!octilinear_summary.is_null()) out.summary["octilinear"] = octilinear_summary;
+  if (!optimize_summary.is_null()) out.summary["optimize_copper"] = optimize_summary;
   if (!stitch_summary.is_null()) out.summary["stitch"] = stitch_summary;
   if (!pour_summary.is_null()) out.summary["pours"] = pour_summary;
   out.summary["copper_layers"] = lb.board.copper_count();

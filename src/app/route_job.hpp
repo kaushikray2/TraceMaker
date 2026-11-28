@@ -177,7 +177,8 @@ struct RouteJob {
   // --octilinear (D187, M23 E3): new tracks off the eight directions become doglegs of two that are on them where the exact check allows,
   // judged like the other passes (kept only if no net has more unconnected items). Off by default.
   bool octilinear = false;
-  double octilinear_min_leg = 0.5;  // --octilinear-min-leg: shortest leg, in track widths (0 = any); 0.5 measured (bench/records/m23-e3)
+  double octilinear_min_leg = 0.5;
+  bool optimize_copper = false;  // --optimize-copper (issue #67, Phase 4A): post-route via-jog collapse and collinear merge, judged like the other passes (distinct from the router clean-up behind --no-optimize)  // --octilinear-min-leg: shortest leg, in track widths (0 = any); 0.5 measured (bench/records/m23-e3)
   // --stitch-vias: "planes" (vias of a plane's net on a grid where its fills overlap on two or more layers),
   // "return" (a plane via near each via of the signals that need a reference plane: component rules of kind
   // reference_plane, and --stitch-return "PATTERN=PLANE_NET"), or "all". Empty = off.
