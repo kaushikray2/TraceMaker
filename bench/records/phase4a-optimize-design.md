@@ -17,9 +17,15 @@ family as `octilinear_tracks` / `widen_tracks`: it rewrites the run's new copper
 (the `res.tracks` / `res.vias` of a route job) against the input board, and the
 call site judges it like every after-route pass (doc 05 §39): the result is kept
 only if no net has more unconnected items with it than without it. Opt-in via
-`--optimize` (RouteJob.optimize, default off — default runs are byte-identical).
+`--optimize-copper` (RouteJob.optimize_copper, default off — default runs are byte-identical).
 Input (already-placed) copper is never modified in this slice; on the gate bench
 all copper is new, so the slice is fully exercised there.
+
+
+Note on naming: the router already owns `--optimize`/`--no-optimize` for its in-search
+clean-up (`optimize_vias`/`lns_vias` in router.cpp, on by default) — so the 1.667x
+baseline already includes that clean-up's effect, and this pass removes the geometric
+jogs it leaves behind. Hence the distinct flag name.
 
 ## Stage A — collinear merge (copper-identical)
 
