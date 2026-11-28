@@ -3775,7 +3775,7 @@ struct Router::Impl {
   // Issue 68 (Phase 4B): congestion-weighted re-decomposition. plan() fixed the spanning tree of each
   // multi-pin net before the first pass; negotiation has since priced the contested cells into the
   // history map, but the tree never changed, so a bus net keeps the pairing that congestion made wrong.
-  // At a pass boundary this re-runs Prim over the clusters the routed connections of a net have already
+  // At a pass boundary or a restart this re-runs Prim over the clusters the routed connections of a net have already
   // joined (the joined_roots contraction), with edge weight = plan distance + history sampled along the
   // pad-pair segment, and rewrites the endpoints of the still-open connections. Routed copper is never
   // touched; the connection count per net is invariant (contracting a tree along its routed edges leaves
@@ -8151,6 +8151,10 @@ struct Router::Impl {
                     pending.end());
       ++res.restarts;
       emit("{\"type\":\"stage\",\"name\":\"restart " + std::to_string(restart) + "\",\"state\":\"begin\",\"detail\":\"hardest connections first, history kept\"}");
+      // Issue 68: a restart keeps the history and re-opens everything, so it is the other natural
+      // re-decomposition point (under a work budget a board may spend its whole budget inside the
+      // first pass and never reach a later pass boundary; restarts and passes both re-plan there).
+      if (opt.redecomp_every > 0) redecompose();
     }
     int run_best = -1, run_best_pass = 0;  // best routed count since this restart began, and the pass that set it
     for (int pass = 0; pass < opt.max_passes && !pending.empty() && !out_of_budget(); ++pass) {
