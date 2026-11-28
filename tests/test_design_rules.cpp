@@ -1,4 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Modifications Copyright (C) 2026 SiliconBrane Inc.
+// Modified 2026 as part of the SiliconBrane fork of TraceMaker:
+// regression test: ClassCache keys keep a tuning-profile class apart from scalar-equal classes.
+// The modifications are licensed under GPL-3.0-or-later, the same
+// terms as the original work. The original copyright notice above
+// remains in force for the original portions of this file.
 // Custom-rule routing and DRC (doc 05 §27): disallow, physical hole clearance and via-only keepouts.
 #include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>

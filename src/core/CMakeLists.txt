@@ -1,3 +1,9 @@
+# Modifications Copyright (C) 2026 SiliconBrane Inc.
+# Modified 2026 as part of the SiliconBrane fork of TraceMaker:
+# the version string carries the commit it was built from, computed at build time via cmake/GitVersion.cmake.
+# The modifications are licensed under GPL-3.0-or-later, the same
+# terms as the original work.
+
 find_package(Threads REQUIRED)
 add_library(tm_core STATIC version.cpp live.cpp)
 add_library(tm::core ALIAS tm_core)

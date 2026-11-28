@@ -1,4 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Modifications Copyright (C) 2026 SiliconBrane Inc.
+// Modified 2026 as part of the SiliconBrane fork of TraceMaker:
+// the profiled-net test asserts per-layer-native narrowing semantics.
+// The modifications are licensed under GPL-3.0-or-later, the same
+// terms as the original work. The original copyright notice above
+// remains in force for the original portions of this file.
 // KiCad 10 tuning profiles (doc 05 §58, D145): read from the project, compiled into KiCad's implicit width rules, and routed with each
 // layer's profile width.
 #include <catch2/catch_test_macros.hpp>

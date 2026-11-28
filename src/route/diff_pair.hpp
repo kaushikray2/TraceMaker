@@ -1,4 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Modifications Copyright (C) 2026 SiliconBrane Inc.
+// Modified 2026 as part of the SiliconBrane fork of TraceMaker:
+// per-layer pair geometry declarations, blind and micro pair via spans, and the per-layer pair gap floor.
+// The modifications are licensed under GPL-3.0-or-later, the same
+// terms as the original work. The original copyright notice above
+// remains in force for the original portions of this file.
 #pragma once
 // Differential pairs (design doc 05 §9 phase 3, §15): the geometry rule a pair is routed at, and a measurement of
 // how a routed pair came out (coupled share, gap, intra-pair skew). The coupled search itself lives in the router

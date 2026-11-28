@@ -1,3 +1,21 @@
+# Copyright (C) 2026 SiliconBrane Inc.
+#
+# This file is part of TraceMaker (SiliconBrane fork).
+#
+# TraceMaker is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# TraceMaker is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with TraceMaker. If not, see <https://www.gnu.org/licenses/>.
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Build-time version stamp (issues 40/56): recomputed on every build so the binary always
 # names the HEAD it was built from, not the HEAD of the last configure. The header is
 # rewritten only when the stamp actually changes, so an unchanged stamp costs no relink.
