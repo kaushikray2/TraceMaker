@@ -685,6 +685,10 @@ OPTIONS:
                               Return-path stitching for nets as PATTERN=PLANE_NET, e.g.
                               'USB_D*=GND' (repeatable). Return-path stitching from component
                               rules is experimental
+          --stitch-pair-transitions
+                              Return-path stitching: one plane via per differential-pair layer
+                              transition, placed symmetrically between the two signal vias (TI
+                              SPRAAR7J section 2; Phase 4C, issue #69)
           --pass-work INT:POSITIVE
                               Work budget of each after-route pass, in exact checks (default
                               2,000,000)
