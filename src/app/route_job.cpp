@@ -2368,6 +2368,10 @@ RouteJobResult run_route_job(RouteJob job) {
   for (const auto& [k, v] : {std::pair<const char*, long>{"via_shoves", res.via_shoves}, {"via_shove_trials", res.via_shove_trials}, {"window_escalations", res.window_escalations},
                              {"via_retried", res.via_retried}, {"fanout_holds", res.fanout_holds}, {"fanout_heads", res.fanout_heads}})
     if (v > 0) out.summary[k] = v;
+  if (res.redecomp_rounds > 0) {  // issue 68: live re-decomposition counters, only when it ran
+    out.summary["redecomp_rounds"] = res.redecomp_rounds;
+    out.summary["redecomp_changed"] = res.redecomp_changed;
+  }
   if (!refill_summary.is_null()) {
     out.summary["refill"] = refill_summary;
     out.summary["unconnected_after_refill"] = unconnected_after_refill;
