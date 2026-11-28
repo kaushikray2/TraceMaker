@@ -667,6 +667,9 @@ OPTIONS:
           --octilinear-min-leg FLOAT:FLOAT in [0 - 20]
                               With --octilinear: the shortest leg a dogleg may have, in track
                               widths (default 0.5; 0 = any)
+          --optimize-copper   Post-route optimisation (Phase 4A): collapse via jogs and merge
+                              collinear tracks in the new copper; kept only if no net gains
+                              unconnected items
           --widen-net TEXT ...
                               With --widen-power: target width for nets as PATTERN=WIDTH_MM,
                               e.g. '+5V=0.8' or 'VBUS*=1' (repeatable)
