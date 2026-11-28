@@ -448,6 +448,7 @@ struct Router::Impl {
   }
   double via_mult_of(NetId n) const { return n >= 0 && static_cast<std::size_t>(n) < net_via_mult.size() ? net_via_mult[static_cast<std::size_t>(n)] : 1.0; }
   core::FlatU64U16 history;  // contested lattice cells (PathFinder history cost); flat map: ~1e8 finds per large job
+  std::size_t redecomp_hist_mark = 0;  // issue 68: history size at the last re-decomposition round (the growth trigger)
   std::vector<int> init_root;        // copper item -> initial cluster root (fixed copper)
   // With soft zones: routed copper item -> initial clusters of the same-net plane fills it touches, so a via that
   // passes through several planes of its net joins all of them (`joined`). Teardrops are no planes.
@@ -3777,14 +3778,15 @@ struct Router::Impl {
   // history map, but the tree never changed, so a bus net keeps the pairing that congestion made wrong.
   // At a pass boundary or a restart this re-runs Prim over the clusters the routed connections of a net have already
   // joined (the joined_roots contraction), with edge weight = plan distance + history sampled along the
+  // (the triggers: every N passes, every restart, and whenever the history map has grown by half again)
   // pad-pair segment, and rewrites the endpoints of the still-open connections. Routed copper is never
   // touched; the connection count per net is invariant (contracting a tree along its routed edges leaves
   // the open edges as a spanning forest of the contracted clusters), and every weight is a pure function
   // of the contents of the history map (point lookups in fixed index order), so a seeded run stays
   // deterministic. Nets with zone targets, coupled-pair halves or bundle lanes are skipped: their
   // pairings carry extra structure (doc 05 section 17).
-  void redecompose() {
-    if (history.empty()) return;
+  bool redecompose() {
+    if (history.empty()) return false;  // nothing negotiated yet: no prices to re-plan with
     ++res.redecomp_rounds;
     const int changed_before = res.redecomp_changed;
     std::map<NetId, std::vector<int>> open_by_net;
@@ -3865,7 +3867,8 @@ struct Router::Impl {
           const int gx = to_ix(x), gy = to_iy(y);
           for (int l = 0; l < nl; ++l) h += hist_cost(l, gx, gy);
         }
-        return base + opt.redecomp_hist * static_cast<double>(h) / ((S + 1) * std::max(1, nl));
+        const double cong = opt.redecomp_hist * static_cast<double>(h) / ((S + 1) * std::max(1, nl));
+        return base + std::min(cong, 0.10 * base);  // history breaks near-ties only: the sample is a straight-line proxy for the routed path cost, so congestion may re-rank near-equal pairings but never override geometry
       };
       // Prim over the clusters, in fixed index order (the plan() tie behaviour: first strict minimum wins).
       std::vector<std::uint8_t> in(k, 0);
@@ -3916,6 +3919,10 @@ struct Router::Impl {
     }
     if (res.redecomp_changed != changed_before)
       emit("{\"type\":\"stage\",\"name\":\"redecompose\",\"state\":\"done\",\"detail\":\"round " + std::to_string(res.redecomp_rounds) + ": " + std::to_string(res.redecomp_changed - changed_before) + " connections re-paired\"}");
+    if (std::getenv("TM_DEBUG_REDECOMP"))
+      std::fprintf(stderr, "[redecomp] round %d: changed %d this call, history cells %zu\n", res.redecomp_rounds, res.redecomp_changed - changed_before, history.size());
+    redecomp_hist_mark = history.size();
+    return true;
   }
 
   // Pad-to-plane fallback (D155, --plane-informed): a pad that cannot reach its plane joins the nearest pad of its net within
@@ -8180,6 +8187,19 @@ struct Router::Impl {
         ++pass_taken;
         const int ci = pending.front();
         pending.pop_front();
+        // Issue 68: negotiation in this engine lives inside a pass (victims requeue in the same pass), a
+        // work budget can be spent whole inside the strict first pass (which builds no history at all),
+        // and the stages that do negotiate may make few attempts, so neither pass boundaries nor an
+        // attempt cadence reach the re-plan reliably. The trigger that fires wherever negotiation
+        // actually happens is the history map itself: re-plan once it holds 16 contested cells, then
+        // whenever it has grown by half again (at least 64 cells) since the last round. Deterministic
+        // under a seed/work budget: history contents are a function of the run, not of the clock.
+        if (opt.redecomp_every > 0 && !history.empty()) {
+          const std::size_t h = history.size();
+          if (h < redecomp_hist_mark) redecomp_hist_mark = h;  // a deep restart can only shrink the map
+          const std::size_t need = redecomp_hist_mark == 0 ? 16 : redecomp_hist_mark + std::max<std::size_t>(64, redecomp_hist_mark / 2);
+          if (h >= need) redecompose();
+        }
         auto& st = cs[static_cast<std::size_t>(ci)];
         if (st.routed) continue;
         current = ci;

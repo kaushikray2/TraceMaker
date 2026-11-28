@@ -266,7 +266,7 @@ struct RouterOptions {
   bool escape_release_open = false;  // issue 39: at the first negotiation pass, give back the corridors of pads no routed connection used (they are hard blocks for every other net while their own connections stay open)
   bool radial_supply = false;   // spanning tree: no edge between two pins of one dense package for a net with 3+ pins there (each pin goes to a capacitor or via; the trunk forms outside the escape band)
   double radial_penalty_mm = 10;  // what such an edge costs in the spanning tree
-  int redecomp_every = 0;       // issue 68 (Phase 4B): re-run the spanning-tree decomposition of still-open multi-pin nets every N negotiation passes and at every restart, edge weights priced with the live PathFinder history; 0 = off (the plan is computed once, as before)
+  int redecomp_every = 0;       // issue 68 (Phase 4B): re-run the spanning-tree decomposition of still-open multi-pin nets every N negotiation passes, at every restart, and as the live PathFinder history map grows, edge weights priced with that history; 0 = off (the plan is computed once, as before)
   double redecomp_hist = 1.0;   // weight of the sampled history congestion in a re-decomposition edge price
   bool escape_second_ring = false;  // second-ring balls escape between two outer balls instead of by dog-bone
   // Escape planning version 2 (route/escape_flow.hpp): deep ball-grid arrays get min-cost-flow channel and layer

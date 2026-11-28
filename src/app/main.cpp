@@ -1313,7 +1313,7 @@ static int run_main(int argc, char** argv) {
   route->add_option("--bundle-min", ropt.bundle_min_lanes, "With --bundle-escape: connections needed in a group to form a bundle (default 3)")->group("");
   route->add_option("--escape-via-keep", ropt.escape_via_keep_mm, "Escape plan: no other net's via where its copper would cover an open pin's corridor, this far (mm) past the pad edge (0 = off)")->group("");
   route->add_flag("--escape-persist", ropt.escape_persist, "Escape plan: a ripped-up connection gets its pins' corridors back, and a corridor is kept while the net has other open connections at that package")->group("");
-  route->add_option("--redecompose", ropt.redecomp_every, "Issue 68: re-run the spanning-tree decomposition of still-open multi-pin nets every N negotiation passes, priced with live PathFinder history (0 = off)")->group("");
+  route->add_option("--redecompose", ropt.redecomp_every, "Issue 68: re-run the spanning-tree decomposition of still-open multi-pin nets every N negotiation passes, at restarts, and as the live PathFinder history map grows, priced with that history (0 = off)")->group("");
   route->add_flag("--radial-supply", ropt.radial_supply, "Spanning tree: a net with 3+ pins on one dense package gets no edge between two of those pins (each goes to a capacitor or via: radial supply pins)")->group("");
   route->add_option("--radial-penalty", ropt.radial_penalty_mm, "With --radial-supply: what such an edge costs in the spanning tree (mm, default 10)")->group("");
   route->add_flag("--escape-second-ring", ropt.escape_second_ring, "Escape plan: second-ring balls between two outer balls (else dog-bone vias)")->group("");
