@@ -1,4 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Modifications Copyright (C) 2026 SiliconBrane Inc.
+// Modified 2026 as part of the SiliconBrane fork of TraceMaker:
+// differential-pair tests for per-layer geometry, the neck-down width-override cap, and the per-layer pair gap.
+// The modifications are licensed under GPL-3.0-or-later, the same
+// terms as the original work. The original copyright notice above
+// remains in force for the original portions of this file.
 // Differential pairs (M12, doc 05 §15): the pair rule (gap and width from net class, custom rules and the clearance
 // KiCad requires between the halves), offset/miter geometry, and the coupled-share / gap / skew measurement.
 #include <catch2/catch_test_macros.hpp>

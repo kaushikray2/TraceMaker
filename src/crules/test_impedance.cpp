@@ -1,4 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Modifications Copyright (C) 2026 SiliconBrane Inc.
+// Modified 2026 as part of the SiliconBrane fork of TraceMaker:
+// per-layer widths in component rules; a differential rule's per-layer track width is its pair solution.
+// The modifications are licensed under GPL-3.0-or-later, the same
+// terms as the original work. The original copyright notice above
+// remains in force for the original portions of this file.
 // Impedance solver and IPC-2221 width tests (design doc 15 §5.3-5.4, §9.1 L0). Every reference value names its
 // source and tolerance. Three kinds of reference:
 //   textbook  - worked examples in D. M. Pozar, "Microwave Engineering", 4th ed., Wiley 2012 (Ex. 3.5, 3.7);

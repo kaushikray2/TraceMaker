@@ -1,4 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Modifications Copyright (C) 2026 SiliconBrane Inc.
+// Modified 2026 as part of the SiliconBrane fork of TraceMaker:
+// per-layer track width and gap maps on the net class model.
+// The modifications are licensed under GPL-3.0-or-later, the same
+// terms as the original work. The original copyright notice above
+// remains in force for the original portions of this file.
 #pragma once
 // Design rules as KiCad defines them (design doc 08 §3–4): board minimums and net classes from the
 // .kicad_pro project file, plus custom rules from the .kicad_dru file.
