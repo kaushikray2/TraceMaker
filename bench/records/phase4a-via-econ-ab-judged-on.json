@@ -1,0 +1,86 @@
+[
+ {
+  "board": "LeeChee_1800",
+  "vias": 211,
+  "segments": 3080,
+  "added_errors": {},
+  "added_total": 0,
+  "error_gate": "unknown",
+  "clean": false,
+  "routed": 1090,
+  "connections": 1160,
+  "optimize_copper": null
+ },
+ {
+  "board": "MonApollo_analog-board",
+  "vias": 374,
+  "segments": 3272,
+  "added_errors": {},
+  "added_total": 0,
+  "error_gate": "pass",
+  "clean": false,
+  "routed": 1076,
+  "connections": 1190,
+  "optimize_copper": null
+ },
+ {
+  "board": "jadonk_PocketBone",
+  "vias": 100,
+  "segments": 713,
+  "added_errors": {},
+  "added_total": 0,
+  "error_gate": "pass",
+  "clean": false,
+  "routed": 201,
+  "connections": 202,
+  "optimize_copper": null
+ },
+ {
+  "board": "kitspace_PSLab",
+  "vias": 188,
+  "segments": 1204,
+  "added_errors": {},
+  "added_total": 0,
+  "error_gate": "pass",
+  "clean": true,
+  "routed": 339,
+  "connections": 339,
+  "optimize_copper": null
+ },
+ {
+  "board": "mechkeys_MF68+10",
+  "vias": 68,
+  "segments": 1290,
+  "added_errors": {},
+  "added_total": 0,
+  "error_gate": "pass",
+  "clean": false,
+  "routed": 369,
+  "connections": 415,
+  "optimize_copper": null
+ },
+ {
+  "board": "rvi_v2x_hardware_V2X",
+  "vias": 288,
+  "segments": 1711,
+  "added_errors": {},
+  "added_total": 0,
+  "error_gate": "pass",
+  "clean": false,
+  "routed": 458,
+  "connections": 479,
+  "optimize_copper": null
+ },
+ {
+  "board": "tiny-8088_Computer",
+  "vias": 34,
+  "segments": 815,
+  "added_errors": {},
+  "added_total": 0,
+  "error_gate": "pass",
+  "clean": false,
+  "routed": 243,
+  "connections": 284,
+  "optimize_copper": null
+ }
+]
