@@ -1010,9 +1010,23 @@ Coord RuleEngine::clearance_rules(const CopperItem& a, const CopperItem& b, int 
   // Observed: the smaller of clearance and diff-pair gap applies (0.154 gap passes under a 0.2 class; 0.2 mm
   // pads pass under a 0.25 gap).
   if (coupled_diff_pair(a.net, b.net)) {
-    req = std::min(req, netclass(a).diff_pair_gap);
     auto track = [](const CopperItem& it) { return it.kind == ItemKind::Track || it.kind == ItemKind::Arc; };
-    if (const Coord g = netclass(a).tuning_pair_gap; g > 0 && track(a) && track(b)) req = std::min(req, g);
+    // Per-layer pair gap (issue 64): pair_rule derives its required gap as the widest of the two
+    // classes' min(clearance, gap), each class's gap taken from its per-layer map on this layer
+    // when it has one (issue 37's diff_pair_gap_on) and the scalar gap otherwise. Deriving it the
+    // same way here - gap_of per class, composed identically - keeps this check in exact
+    // agreement with the spacing pair_rule targets (issue 61), symmetric in the two items, for
+    // tighter and wider per-layer entries alike. Off-layer and non-track probes use the scalars.
+    const bool on_layer = layer >= 0 && layer < b_.copper_count() && track(a) && track(b);
+    auto gap_of = [&](const model::NetClass& nc) {
+      if (on_layer)
+        if (const auto it = nc.diff_pair_gap_on.find(b_.copper_name(layer)); it != nc.diff_pair_gap_on.end()) return it->second;
+      return nc.diff_pair_gap;
+    };
+    const auto& na = netclass(a);
+    const auto& nb = netclass(b);
+    req = std::max(std::min(req, gap_of(na)), std::min(req, gap_of(nb)));
+    if (const Coord g = std::max(na.tuning_pair_gap, nb.tuning_pair_gap); g > 0 && track(a) && track(b)) req = std::min(req, g);
   }
   // A copper zone's own clearance is a local clearance: the larger of it and the net-class value applies (KiCad names it
   // "zone clearance").
