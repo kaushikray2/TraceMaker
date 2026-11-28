@@ -2773,9 +2773,9 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
     pj.log = nullptr;
     RouteJobResult pr = run_route_job(std::move(pj));
     remove_tmp(proof_out);
-    if (pr.summary.contains("why_open")) return pr.summary["why_open"];
+    if (pr.summary.contains("why_open")) return std::optional<nlohmann::json>(pr.summary["why_open"]);
     if (pr.result.connections > 0 && pr.result.routed >= pr.result.connections)
-      return nlohmann::json{{"walled_in", 0}, {"proved", nlohmann::json::array()}};
+      return std::optional<nlohmann::json>(nlohmann::json{{"walled_in", 0}, {"proved", nlohmann::json::array()}});
     return std::nullopt;
   };
   // The walled count alone (the chains rung re-pricing, above).
