@@ -1122,6 +1122,7 @@ RouteJobResult run_route_job(RouteJob job) {
   if (job.route_open_only && !input_copper)
     log("route-open-only: the board has no routed copper: this run is a plain route, and the repair stage runs on its result");
   auto& res = out.result;
+  long redecomp_rounds_total = 0, redecomp_changed_total = 0;  // issue 68: stages replace res wholesale; the re-decomposition counters accumulate across them
   // The after-route stages below may not undo the router's tuning (D173, issue #60): a stage's copper is kept only if no net is
   // further outside a `length` or `skew` rule with it than without it, measured as the DRC measures the written board.
   const bool length_rules = std::any_of(rules.custom.begin(), rules.custom.end(), [](const model::CustomRule& c) {
@@ -1344,6 +1345,8 @@ RouteJobResult run_route_job(RouteJob job) {
       if (better) {
         best_from_rescue = true;
         stopped_by = next.stopped_by;
+        redecomp_rounds_total += res.redecomp_rounds;
+        redecomp_changed_total += res.redecomp_changed;
         res = std::move(next.res);
         ran = std::move(next.ran);
         best_index = next.best_index;
@@ -1467,6 +1470,8 @@ RouteJobResult run_route_job(RouteJob job) {
       previous["routed_before"] = res.routed;
       if (adopt) {
         stopped_by = next.stopped_by;
+        redecomp_rounds_total += res.redecomp_rounds;
+        redecomp_changed_total += res.redecomp_changed;
         res = std::move(next.res);
         ran = std::move(next.ran);
         best_index = next.best_index;
@@ -2403,6 +2408,12 @@ RouteJobResult run_route_job(RouteJob job) {
   for (const auto& [k, v] : {std::pair<const char*, long>{"via_shoves", res.via_shoves}, {"via_shove_trials", res.via_shove_trials}, {"window_escalations", res.window_escalations},
                              {"via_retried", res.via_retried}, {"fanout_holds", res.fanout_holds}, {"fanout_heads", res.fanout_heads}})
     if (v > 0) out.summary[k] = v;
+  res.redecomp_rounds += static_cast<int>(redecomp_rounds_total);
+  res.redecomp_changed += static_cast<int>(redecomp_changed_total);
+  if (res.redecomp_rounds > 0) {  // issue 68: live re-decomposition counters, only when it ran
+    out.summary["redecomp_rounds"] = res.redecomp_rounds;
+    out.summary["redecomp_changed"] = res.redecomp_changed;
+  }
   if (!refill_summary.is_null()) {
     out.summary["refill"] = refill_summary;
     out.summary["unconnected_after_refill"] = unconnected_after_refill;

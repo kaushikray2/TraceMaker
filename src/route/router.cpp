@@ -448,6 +448,7 @@ struct Router::Impl {
   }
   double via_mult_of(NetId n) const { return n >= 0 && static_cast<std::size_t>(n) < net_via_mult.size() ? net_via_mult[static_cast<std::size_t>(n)] : 1.0; }
   core::FlatU64U16 history;  // contested lattice cells (PathFinder history cost); flat map: ~1e8 finds per large job
+  std::size_t redecomp_hist_mark = 0;  // issue 68: history size at the last re-decomposition round (the growth trigger)
   std::vector<int> init_root;        // copper item -> initial cluster root (fixed copper)
   // With soft zones: routed copper item -> initial clusters of the same-net plane fills it touches, so a via that
   // passes through several planes of its net joins all of them (`joined`). Teardrops are no planes.
@@ -3770,6 +3771,158 @@ struct Router::Impl {
           }
     }
     return find(ra) == find(rb);
+  }
+
+  // Issue 68 (Phase 4B): congestion-weighted re-decomposition. plan() fixed the spanning tree of each
+  // multi-pin net before the first pass; negotiation has since priced the contested cells into the
+  // history map, but the tree never changed, so a bus net keeps the pairing that congestion made wrong.
+  // At a pass boundary or a restart this re-runs Prim over the clusters the routed connections of a net have already
+  // joined (the joined_roots contraction), with edge weight = plan distance + history sampled along the
+  // (the triggers: every N passes, every restart, and whenever the history map has grown by half again)
+  // pad-pair segment, and rewrites the endpoints of the still-open connections. Routed copper is never
+  // touched; the connection count per net is invariant (contracting a tree along its routed edges leaves
+  // the open edges as a spanning forest of the contracted clusters), and every weight is a pure function
+  // of the contents of the history map (point lookups in fixed index order), so a seeded run stays
+  // deterministic. Nets with zone targets, coupled-pair halves or bundle lanes are skipped: their
+  // pairings carry extra structure (doc 05 section 17).
+  bool redecompose() {
+    if (history.empty()) return false;  // nothing negotiated yet: no prices to re-plan with
+    ++res.redecomp_rounds;
+    const int changed_before = res.redecomp_changed;
+    std::map<NetId, std::vector<int>> open_by_net;
+    for (std::size_t i = 0; i < cs.size(); ++i) {
+      const auto& st = cs[i];
+      if (st.routed || st.dead || st.c.net == 0 || st.c.pad_b < 0 || st.c.zone_b >= 0) continue;
+      open_by_net[st.c.net].push_back(static_cast<int>(i));
+    }
+    const bool by_gap = opt.plan_gap && !opt.diff_pairs && opt.pair_nets.empty();
+    for (auto& [net, open] : open_by_net) {
+      if (open.size() < 2) continue;
+      bool skip = false;
+      for (std::size_t i = 0; i < cs.size() && !skip; ++i) {
+        if (cs[i].c.net != net) continue;
+        if (cs[i].coupled || cs[i].bus_lane || cs[i].bundle_lane || cs[i].c.zone_b >= 0) skip = true;
+        if (i < pair_partner.size() && pair_partner[i] >= 0) skip = true;
+        if (!conn_bundle.empty() && conn_bundle[i] >= 0) skip = true;
+      }
+      if (skip) continue;
+      // Contract the clusters joined by the routed connections of this net (the joined_roots union-find).
+      std::map<int, int> up;
+      auto find = [&](int x) {
+        while (up.count(x) && up[x] != x) x = up[x];
+        return x;
+      };
+      auto root_of = [&](const Connection& c, bool second) {
+        if (!second) return init_root[static_cast<std::size_t>(pad_item[static_cast<std::size_t>(c.pad_a)])];
+        return init_root[static_cast<std::size_t>(pad_item[static_cast<std::size_t>(c.pad_b)])];
+      };
+      for (const auto& st : cs) {
+        if (!st.routed || st.implicit || st.c.net != net || st.c.pad_b < 0) continue;
+        const int x = find(root_of(st.c, false)), y = find(root_of(st.c, true));
+        if (x != y) up[x] = y;
+        for (int item : st.items)
+          if (item >= 0 && static_cast<std::size_t>(item) < plane_contacts.size())
+            for (int root : plane_contacts[static_cast<std::size_t>(item)]) {
+              const int u = find(x), v = find(root);
+              if (u != v) up[u] = v;
+            }
+      }
+      // Clusters incident to the open connections, in first-seen order; pads per cluster.
+      std::vector<int> cluster_id;
+      std::map<int, int> cluster_of;
+      std::vector<std::vector<int>> pads_of;
+      std::vector<int> slot_cluster_a(open.size()), slot_cluster_b(open.size());
+      auto cluster = [&](int root) {
+        const auto it = cluster_of.find(root);
+        if (it != cluster_of.end()) return it->second;
+        const int id = static_cast<int>(pads_of.size());
+        cluster_of[root] = id;
+        cluster_id.push_back(root);
+        pads_of.emplace_back();
+        return id;
+      };
+      for (std::size_t s = 0; s < open.size(); ++s) {
+        const auto& c = cs[static_cast<std::size_t>(open[s])].c;
+        slot_cluster_a[s] = cluster(find(root_of(c, false)));
+        slot_cluster_b[s] = cluster(find(root_of(c, true)));
+        pads_of[static_cast<std::size_t>(slot_cluster_a[s])].push_back(c.pad_a);
+        pads_of[static_cast<std::size_t>(slot_cluster_b[s])].push_back(c.pad_b);
+      }
+      const std::size_t k = pads_of.size();
+      if (k < 2) continue;
+      std::size_t live_slots = 0;
+      for (std::size_t s = 0; s < open.size(); ++s)
+        if (slot_cluster_a[s] != slot_cluster_b[s]) ++live_slots;
+      if (live_slots != k - 1) continue;  // the open forest must span the contracted clusters exactly
+      auto edge_weight = [&](int pa, int pb) -> double {
+        const Point A = b.pads[static_cast<std::size_t>(pa)].pos;
+        const Point B = b.pads[static_cast<std::size_t>(pb)].pos;
+        const double centre = std::hypot(static_cast<double>(A.x - B.x), static_cast<double>(A.y - B.y));
+        const double base = by_gap ? pad_gap(pa, pb, centre) : centre;
+        std::int64_t h = 0;
+        constexpr int S = 8;
+        for (int s = 0; s <= S; ++s) {
+          const Coord x = static_cast<Coord>(A.x + static_cast<std::int64_t>(B.x - A.x) * s / S);
+          const Coord y = static_cast<Coord>(A.y + static_cast<std::int64_t>(B.y - A.y) * s / S);
+          const int gx = to_ix(x), gy = to_iy(y);
+          for (int l = 0; l < nl; ++l) h += hist_cost(l, gx, gy);
+        }
+        const double cong = opt.redecomp_hist * static_cast<double>(h) / ((S + 1) * std::max(1, nl));
+        return base + std::min(cong, 0.10 * base);  // history breaks near-ties only: the sample is a straight-line proxy for the routed path cost, so congestion may re-rank near-equal pairings but never override geometry
+      };
+      // Prim over the clusters, in fixed index order (the plan() tie behaviour: first strict minimum wins).
+      std::vector<std::uint8_t> in(k, 0);
+      std::vector<double> best(k, 1e300);
+      std::vector<std::pair<int, int>> how(k, {-1, -1});
+      in[0] = 1;
+      auto upd = [&](std::size_t from) {
+        for (std::size_t j = 0; j < k; ++j) {
+          if (in[j]) continue;
+          for (int pa : pads_of[from])
+            for (int pb : pads_of[j]) {
+              const double w = edge_weight(pa, pb);
+              if (w < best[j]) {
+                best[j] = w;
+                how[j] = {pa, pb};
+              }
+            }
+        }
+      };
+      upd(0);
+      std::vector<std::pair<int, int>> mst;
+      for (std::size_t step = 1; step < k; ++step) {
+        std::size_t pick = k;
+        for (std::size_t j = 0; j < k; ++j)
+          if (!in[j] && (pick == k || best[j] < best[pick])) pick = j;
+        if (pick == k || how[pick].first < 0) {
+          mst.clear();
+          break;
+        }
+        in[pick] = 1;
+        mst.push_back(how[pick]);
+        upd(pick);
+      }
+      if (mst.size() != k - 1) continue;
+      std::size_t e = 0;
+      for (std::size_t s = 0; s < open.size(); ++s) {
+        if (slot_cluster_a[s] == slot_cluster_b[s]) continue;  // already joined: joined() satisfies it
+        auto& c = cs[static_cast<std::size_t>(open[s])].c;
+        const auto [pa, pb] = mst[e++];
+        if ((c.pad_a == pa && c.pad_b == pb) || (c.pad_a == pb && c.pad_b == pa)) continue;
+        c.pad_a = pa;
+        c.pad_b = pb;
+        const Point A = b.pads[static_cast<std::size_t>(pa)].pos;
+        const Point B = b.pads[static_cast<std::size_t>(pb)].pos;
+        c.length = static_cast<Coord>(std::llround(std::hypot(static_cast<double>(A.x - B.x), static_cast<double>(A.y - B.y))));
+        ++res.redecomp_changed;
+      }
+    }
+    if (res.redecomp_changed != changed_before)
+      emit("{\"type\":\"stage\",\"name\":\"redecompose\",\"state\":\"done\",\"detail\":\"round " + std::to_string(res.redecomp_rounds) + ": " + std::to_string(res.redecomp_changed - changed_before) + " connections re-paired\"}");
+    if (std::getenv("TM_DEBUG_REDECOMP"))
+      std::fprintf(stderr, "[redecomp] round %d: changed %d this call, history cells %zu\n", res.redecomp_rounds, res.redecomp_changed - changed_before, history.size());
+    redecomp_hist_mark = history.size();
+    return true;
   }
 
   // Pad-to-plane fallback (D155, --plane-informed): a pad that cannot reach its plane joins the nearest pad of its net within
@@ -8005,10 +8158,15 @@ struct Router::Impl {
                     pending.end());
       ++res.restarts;
       emit("{\"type\":\"stage\",\"name\":\"restart " + std::to_string(restart) + "\",\"state\":\"begin\",\"detail\":\"hardest connections first, history kept\"}");
+      // Issue 68: a restart keeps the history and re-opens everything, so it is the other natural
+      // re-decomposition point (under a work budget a board may spend its whole budget inside the
+      // first pass and never reach a later pass boundary; restarts and passes both re-plan there).
+      if (opt.redecomp_every > 0) redecompose();
     }
     int run_best = -1, run_best_pass = 0;  // best routed count since this restart began, and the pass that set it
     for (int pass = 0; pass < opt.max_passes && !pending.empty() && !out_of_budget(); ++pass) {
       res.passes = pass + 1;
+      if (opt.redecomp_every > 0 && pass > 0 && pass % opt.redecomp_every == 0) redecompose();  // issue 68: live topology, priced by the history negotiation has built so far
       if (pass == 1 && opt.escape_release_open) release_open_escapes();  // issue 39: still-open pins give their corridors back, after the first pass whatever kind it was (issue 58: under --warm or --no-strict-first pass 0 is already negotiated, and the release still waits one full pass so the corridors can serve it)
       strict_pass = pass == 0 && opt.strict_first && !opt.warm;
       if (opt.fanout_hold && !pad_stub.empty()) {
@@ -8029,6 +8187,19 @@ struct Router::Impl {
         ++pass_taken;
         const int ci = pending.front();
         pending.pop_front();
+        // Issue 68: negotiation in this engine lives inside a pass (victims requeue in the same pass), a
+        // work budget can be spent whole inside the strict first pass (which builds no history at all),
+        // and the stages that do negotiate may make few attempts, so neither pass boundaries nor an
+        // attempt cadence reach the re-plan reliably. The trigger that fires wherever negotiation
+        // actually happens is the history map itself: re-plan once it holds 16 contested cells, then
+        // whenever it has grown by half again (at least 64 cells) since the last round. Deterministic
+        // under a seed/work budget: history contents are a function of the run, not of the clock.
+        if (opt.redecomp_every > 0 && !history.empty()) {
+          const std::size_t h = history.size();
+          if (h < redecomp_hist_mark) redecomp_hist_mark = h;  // a deep restart can only shrink the map
+          const std::size_t need = redecomp_hist_mark == 0 ? 16 : redecomp_hist_mark + std::max<std::size_t>(64, redecomp_hist_mark / 2);
+          if (h >= need) redecompose();
+        }
         auto& st = cs[static_cast<std::size_t>(ci)];
         if (st.routed) continue;
         current = ci;
