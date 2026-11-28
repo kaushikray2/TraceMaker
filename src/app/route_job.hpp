@@ -1,4 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Modifications Copyright (C) 2026 SiliconBrane Inc.
+// Modified 2026 as part of the SiliconBrane fork of TraceMaker:
+// RouteJob surface for the finish ladder, deterministic mode, scoped reroute and batch mode.
+// The modifications are licensed under GPL-3.0-or-later, the same
+// terms as the original work. The original copyright notice above
+// remains in force for the original portions of this file.
+
 #pragma once
 // One `tracemaker route` run as a reusable function, shared by the CLI (src/app/main.cpp) and the Python bindings
 // (bindings/), so both take exactly the same code path (design doc 08 §5).
@@ -191,6 +198,18 @@ struct RouteJobResult {
   int unconnected_after_refill = -1;  // with soft zones: what KiCad's refill would leave unconnected
   // 0 when everything planned was routed (and, with soft zones, nothing is unconnected after the refill).
   int exit_code() const { return unconnected_after_refill >= 0 ? (unconnected_after_refill == 0 ? 0 : 3) : result.routed == result.connections ? 0 : 3; }
+  // Why exit_code() is what it is (issue 43): exit 3 conflates connections the router left
+  // open with pours KiCad's zone refill would leave unconnected on an otherwise complete
+  // board. The route JSON summary carries this discriminator so callers can tell them apart.
+  // The discriminator is the routed count, not the refill count (issue 54):
+  // unconnected_after_refill counts every unconnected item on the refilled board, the pads
+  // of connections the router never routed included, so keying the reason on it labels any
+  // soft-zones job with genuine opens "unconnected_after_refill". Only a job that routed
+  // everything it planned and still exits 3 earns that reason.
+  const char* exit_reason() const {
+    if (exit_code() == 0) return "complete";
+    return result.routed < result.connections ? "open_connections" : "unconnected_after_refill";
+  }
 };
 
 // Reads the board and its rules, routes (a portfolio when more than one variant runs), writes the requested outputs.
@@ -215,7 +234,7 @@ RouteJobResult run_layer_advisor(RouteJob job, std::vector<int> counts);
 // open + walled-in pins improves over the best board so far: a rung's own copper can wall the pins it leaves open in, and no later rung
 // can reach a walled pin, so the plain open-count rule keeps boards that are worse than they look.
 RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool masks_rung = false, bool fresh_rung = false, bool chains_rung = false,
-                          bool guard_walls = false);
+                          bool guard_walls = false, bool rip_walls = false);
 
 // Buses (doc 05 §38): the groups `specs` ("NAME=PATTERN") name on the board, then, with `detect`, the groups found in
 // the net names that share no net with an earlier group. Each group gets the skew limit of the board's custom

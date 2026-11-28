@@ -1,4 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Modifications Copyright (C) 2026 SiliconBrane Inc.
+// Modified 2026 as part of the SiliconBrane fork of TraceMaker:
+// fixed pre-existing TM_WERROR=ON build failures (hardening #13).
+// The modifications are licensed under GPL-3.0-or-later, the same
+// terms as the original work. The original copyright notice above
+// remains in force for the original portions of this file.
+
 // Escape planning (M9): corridor geometry on a synthetic BGA and the feasibility analysis on a fixture board.
 #include <catch2/catch_test_macros.hpp>
 

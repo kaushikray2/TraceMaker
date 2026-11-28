@@ -1,4 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Modifications Copyright (C) 2026 SiliconBrane Inc.
+// Modified 2026 as part of the SiliconBrane fork of TraceMaker:
+// bounding-box index and window-signature declarations.
+// The modifications are licensed under GPL-3.0-or-later, the same
+// terms as the original work. The original copyright notice above
+// remains in force for the original portions of this file.
+
 #pragma once
 // Obstacle model for routing: every copper item, hole, board edge and keepout, with exact legality tests that
 // use the DRC's rule engine, so the router and the DRC can never disagree about what is legal.

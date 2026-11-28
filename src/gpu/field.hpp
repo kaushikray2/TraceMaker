@@ -1,4 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Modifications Copyright (C) 2026 SiliconBrane Inc.
+// Modified 2026 as part of the SiliconBrane fork of TraceMaker:
+// CUDA field fails loudly on non-convergence; 64-bit field indices; --search-mem binds to the run options.
+// The modifications are licensed under GPL-3.0-or-later, the same
+// terms as the original work. The original copyright notice above
+// remains in force for the original portions of this file.
+
 #pragma once
 // Cost-to-go fields for the router (design doc 05 §5.2, doc 07 §2): exact shortest-path distances from a set
 // of target lattice points over a window, on an octilinear multi-layer lattice with through-via moves.

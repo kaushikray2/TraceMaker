@@ -1,4 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Modifications Copyright (C) 2026 SiliconBrane Inc.
+// Modified 2026 as part of the SiliconBrane fork of TraceMaker:
+// the escape proof now names the routed copper walling a pin (wall_items export, DR-22 Tier 2-prime).
+// The modifications are licensed under GPL-3.0-or-later, the same
+// terms as the original work. The original copyright notice above
+// remains in force for the original portions of this file.
+
 #pragma once
 // Why a connection stays open (doc 20 §2.4): can a track get out of a pin at all, past the board's fixed copper?
 //
@@ -44,6 +51,15 @@ struct PinEscape {
   bool soft_wall = false;            // zone fills, or net-less copper graphics on the pin, are among the walls
   bool soft_only = false;            // enclosed only while those block (route --soft-zones, --soft-copper-graphics would free it); not `enclosed`
   std::vector<std::string> walls;    // what bounds the space: pads ("U3.6"), "the GND zone fill", "the board edge" (nearest first, at most 6)
+  // The walling items that are routed copper (tracks, arcs, vias), identified by board index: what a rip-up
+  // may remove to free the pin. Fixed copper (pads, zones, graphics, holes, the board edge) is never listed.
+  // Sorted by (kind, index), duplicates removed.
+  struct WallItem {
+    int kind = 0;    // drc::ItemKind value: Track, Arc or Via
+    int index = -1;  // index into the board vector of that kind (tracks / arcs / vias)
+    int net = 0;     // the item net (model::NetId)
+  };
+  std::vector<WallItem> wall_items;
   std::string text;                  // one sentence for the user
 };
 

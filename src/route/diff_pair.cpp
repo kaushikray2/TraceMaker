@@ -23,7 +23,7 @@ Coord ceil_half(Coord v) { return (v + 1) / 2; }
 
 }  // namespace
 
-PairRule pair_rule(const model::Board& b, const model::DesignRules& rules, const drc::RuleEngine& re, NetId a, NetId c, Coord via_mask) {
+PairRule pair_rule(const model::Board& b, const model::DesignRules& rules, const drc::RuleEngine& re, NetId a, NetId c, Coord via_mask, const std::string& layer) {
   const auto& na = rules.class_for(b.nets[static_cast<std::size_t>(a)].name);
   const auto& nc = rules.class_for(b.nets[static_cast<std::size_t>(c)].name);
   const auto& m = rules.minimums;
@@ -32,12 +32,13 @@ PairRule pair_rule(const model::Board& b, const model::DesignRules& rules, const
   // on the net raises it (opt wins when given). The wider of the two halves' classes, never below the board minimum.
   auto class_w = [](const model::NetClass& k) { return k.has_diff_pair_gap ? k.diff_pair_width : k.track_width; };
   Coord w = std::max({class_w(na), class_w(nc), m.track_width});
+  Coord raise = 0;  // net-level track_width rules: they raise the width on every layer alike (used again below)
   for (NetId n : {a, c})
     if (const auto k = re.net_constraint(n, "track_width")) {
-      if (k->opt) w = std::max(w, *k->opt);
-      if (k->min) w = std::max(w, *k->min);
+      if (k->opt) raise = std::max(raise, *k->opt);
+      if (k->min) raise = std::max(raise, *k->min);
     }
-  r.width = w;
+  r.width = w = std::max(w, raise);
   // The clearance KiCad requires between the halves: the class clearance, relaxed to the class diff-pair gap only for
   // pairs it recognises by name (drc::RuleEngine::clearance does the same), never below the board minimum.
   const Coord clr = std::max(na.clearance, nc.clearance);
@@ -65,6 +66,43 @@ PairRule pair_rule(const model::Board& b, const model::DesignRules& rules, const
     r.source = "rule";
   }
   r.gap = std::max(gap, req);
+  // Per-layer geometry (issue 38 item 3c): the classes' solved per-layer pair width and gap for
+  // this layer (issue 37's maps, from the component rules' impedance solutions) replace the
+  // class-derived width and gap - they are the most specific statement about this layer. The
+  // net-level raise still floors the width; the gap is floored by the required gap derived from
+  // this layer's own gaps (issue 61). The offset and via spacings below use the replaced values.
+  if (!layer.empty()) {
+    auto class_w_on = [&](const model::NetClass& k) {
+      if (const auto it = k.diff_pair_width_on.find(layer); it != k.diff_pair_width_on.end()) return it->second;
+      if (!k.has_diff_pair_gap)
+        if (const auto it = k.track_width_on.find(layer); it != k.track_width_on.end()) return it->second;
+      return class_w(k);
+    };
+    r.width = std::max({class_w_on(na), class_w_on(nc), m.track_width, raise});
+    Coord g = 0;
+    bool any = false;
+    for (const model::NetClass* k : {&na, &nc})
+      if (const auto it = k->diff_pair_gap_on.find(layer); it != k->diff_pair_gap_on.end()) {
+        g = std::max(g, it->second);
+        any = true;
+      }
+    if (any) {
+      // The floor is this layer's own required gap, not the scalar req (issue 61): re-derive it
+      // with the layer's solved gaps in place of the class gaps, so a tighter inner-layer gap is
+      // not clamped back up to the scalar gap. The tuning-profile cap applies alike.
+      auto gap_of = [&](const model::NetClass& k) {
+        if (const auto it = k.diff_pair_gap_on.find(layer); it != k.diff_pair_gap_on.end()) return it->second;
+        return k.diff_pair_gap;
+      };
+      Coord req_on = clr;
+      if (re.coupled_diff_pair(a, c)) req_on = std::max(std::min(clr, gap_of(na)), std::min(clr, gap_of(nc)));
+      if (const Coord tg = std::max(na.tuning_pair_gap, nc.tuning_pair_gap); tg > 0 && re.coupled_diff_pair(a, c))
+        req_on = std::min(req_on, tg);
+      req_on = std::max(req_on, m.clearance);
+      r.required_gap = req_on;
+      r.gap = std::max(g, req_on);
+    }
+  }
   r.offset = ceil_half(r.width + r.gap) + kRoundMargin;
   // Vias: the class via raised to the board minimums (as the router's own vias), side by side at the via gap.
   r.via_drill = std::max({na.via_drill, nc.via_drill, m.through_hole_diameter});
@@ -76,6 +114,14 @@ PairRule pair_rule(const model::Board& b, const model::DesignRules& rules, const
   r.via_offset = std::max({r.offset, ceil_half(r.via_diameter + vgap), ceil_half(r.via_drill + re.router_hole_to_hole()),
                            ceil_half(r.via_drill / 2 + r.via_diameter / 2 + re.router_hole_clearance())}) +
                  kRoundMargin;
+  // Micro vias (issue 38 item 2): the same spacing rule at the micro diameter, from the classes' microvia
+  // dimensions raised to the board minimums, as the router's own micro vias. Stays 0 when nothing defines them.
+  r.micro_drill = std::max({na.uvia_drill, nc.uvia_drill, m.microvia_drill});
+  r.micro_diameter = std::max({na.uvia_diameter, nc.uvia_diameter, m.microvia_diameter});
+  if (r.micro_diameter > 0)
+    r.micro_via_offset = std::max({r.offset, ceil_half(r.micro_diameter + vgap), ceil_half(r.micro_drill + re.router_hole_to_hole()),
+                                   ceil_half(r.micro_drill / 2 + r.micro_diameter / 2 + re.router_hole_clearance())}) +
+                         kRoundMargin;
   if (const auto k = re.net_constraint(a, "diff_pair_uncoupled"); k && k->max) r.max_uncoupled = *k->max;
   return r;
 }
@@ -100,7 +146,8 @@ Point miter_point(Point c, int d1, int d2, double s) {
   return offset_point(c, Dir2{(n1.x + n2.x) / k, (n1.y + n2.y) / k}, s);
 }
 
-PairStats measure_pair(const std::vector<model::Track>& tracks, const std::vector<model::Via>& vias, NetId a, NetId c, Coord coupled_gap) {
+PairStats measure_pair(const std::vector<model::Track>& tracks, const std::vector<model::Via>& vias, NetId a, NetId c,
+                       const std::vector<Coord>& coupled_gap_on, Coord coupled_gap) {
   PairStats st;
   std::vector<const model::Track*> ta, tc;
   for (const auto& t : tracks) {
@@ -129,7 +176,12 @@ PairStats measure_pair(const std::vector<model::Track>& tracks, const std::vecto
           if (UL <= 0 || std::fabs(dx * uy - dy * ux) > 0.05 * L * UL) continue;  // parallel within 3 degrees only
           best = std::min(best, static_cast<double>(geom::point_seg_dist(p, u->a, u->b)) - static_cast<double>(t->width + u->width) / 2);
         }
-        if (best <= static_cast<double>(coupled_gap)) {
+        // The coupled threshold of the layer this track runs on (issue 61); the scalar is the fallback.
+        const Coord lim = t->layer >= 0 && static_cast<std::size_t>(t->layer) < coupled_gap_on.size() &&
+                                  coupled_gap_on[static_cast<std::size_t>(t->layer)] > 0
+                              ? coupled_gap_on[static_cast<std::size_t>(t->layer)]
+                              : coupled_gap;
+        if (best <= static_cast<double>(lim)) {
           coupled += L / k;
           gaps.push_back(best);
         }
@@ -144,6 +196,10 @@ PairStats measure_pair(const std::vector<model::Track>& tracks, const std::vecto
     st.gap_median = gaps[gaps.size() / 2];
   }
   return st;
+}
+
+PairStats measure_pair(const std::vector<model::Track>& tracks, const std::vector<model::Via>& vias, NetId a, NetId c, Coord coupled_gap) {
+  return measure_pair(tracks, vias, a, c, {}, coupled_gap);
 }
 
 std::vector<std::pair<NetId, NetId>> named_pairs(const model::Board& b, const drc::RuleEngine& re) {

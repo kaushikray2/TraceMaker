@@ -27,14 +27,18 @@ struct PairRule {
   Coord offset = 0;         // centreline to each track centre: (width + gap) / 2, rounded up, plus a rounding margin
   Coord via_diameter = 0, via_drill = 0;
   Coord via_offset = 0;     // centreline to each via centre in a coupled via pair (>= offset)
+  Coord micro_diameter = 0, micro_drill = 0;  // the classes' microvia dimensions at the board minimums; 0 = undefined
+  Coord micro_via_offset = 0;                 // centreline to each micro via centre: the via spacing rule at the micro diameter
   std::optional<Coord> max_uncoupled;  // per half, both ends together
   std::string source;       // "rule", "net class" or "clearance" (for the report)
 };
 
 // `via_mask`: solder-mask expansion of untented vias (route::Obstacles::via_mask()); two vias then need their mask
-// openings apart as well.
+// openings apart as well. `layer`: a copper layer name - where the classes carry solved per-layer pair widths or
+// gaps (issue 37's maps), they replace the class-derived width and gap for that layer (issue 38 item 3c); the
+// empty name, and layers without entries, give the scalar rule.
 PairRule pair_rule(const model::Board& b, const model::DesignRules& rules, const drc::RuleEngine& re, model::NetId a, model::NetId c,
-                   Coord via_mask = 0);
+                   Coord via_mask = 0, const std::string& layer = "");
 
 // Octilinear unit direction d (0..7, E, NE, N, NW, W, SW, S, SE with y down) and its left normal, as doubles.
 struct Dir2 { double x, y; };
@@ -61,6 +65,10 @@ struct PairStats {
 inline Coord coupled_threshold(const PairRule& r) { return r.gap + std::max<Coord>(r.gap / 4, 50'000); }
 PairStats measure_pair(const std::vector<model::Track>& tracks, const std::vector<model::Via>& vias, model::NetId a, model::NetId c,
                        Coord coupled_gap);
+// Per-layer thresholds (issue 61): a sample counts as coupled against the threshold of the copper layer
+// index it runs on; layers without an entry (or a zero entry) fall back to the scalar threshold.
+PairStats measure_pair(const std::vector<model::Track>& tracks, const std::vector<model::Via>& vias, model::NetId a, model::NetId c,
+                       const std::vector<Coord>& coupled_gap_on, Coord coupled_gap);
 
 // Net pairs KiCad treats as differential pairs (names ending in P/N or +/-), in net order.
 std::vector<std::pair<model::NetId, model::NetId>> named_pairs(const model::Board& b, const drc::RuleEngine& re);

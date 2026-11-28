@@ -1,4 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Modifications Copyright (C) 2026 SiliconBrane Inc.
+// Modified 2026 as part of the SiliconBrane fork of TraceMaker:
+// finish ladder with wall-priced rip rounds, the single work-bounded determinism predicate, structured exit codes, scoped reroute and batch job plumbing.
+// The modifications are licensed under GPL-3.0-or-later, the same
+// terms as the original work. The original copyright notice above
+// remains in force for the original portions of this file.
+
 #include "app/route_job.hpp"
 
 #include "app/chains.hpp"
@@ -1002,7 +1009,7 @@ RouteJobResult run_route_job(RouteJob job) {
     log(fmt("tuning profile %s (net class %s, %s): routed at %.3f mm (the width on %s)%s", p->name.c_str(), c.name.c_str(),
             p->differential ? "differential pairs" : "single-ended", nm_to_mm(from->width), from->layer.c_str(),
             p->differential ? (excluded.empty() ? "" : fmt("; pairs kept off %zu layer%s with another width or gap", excluded.size(), excluded.size() == 1 ? "" : "s").c_str())
-                            : "; narrowed to each layer's width after routing"));
+                            : "; per-layer profile widths apply on the other layers"));
     if (tuning_summary.is_null()) tuning_summary = nlohmann::json::array();
     tuning_summary.push_back({{"net_class", c.name}, {"profile", p->name}, {"differential", p->differential}, {"route_width_mm", nm_to_mm(from->width)},
                               {"route_width_from", from->layer}, {"pair_gap_mm", p->differential ? nm_to_mm(from->gap) : 0.0}, {"layers", layers},
@@ -1661,6 +1668,27 @@ RouteJobResult run_route_job(RouteJob job) {
       if (kept) {
         res.tracks.insert(res.tracks.end(), r2.tracks.begin(), r2.tracks.end());
         res.vias.insert(res.vias.end(), r2.vias.begin(), r2.vias.end());
+        // A kept repair heals some of pass 1's open connections, but pass 2's routed
+        // count is not additive: pass 2 ran on the refilled board without soft zones,
+        // so it also bridges plane connections pass 1 counted as routed through the
+        // pour and the refill severed into islands - adding the counts could push
+        // routed past connections. Instead drop from pass 1's open list the entries
+        // pass 2 no longer reports open and derive routed from what remains, so
+        // routed = connections - |unrouted| holds exactly (issue 54).
+        auto still_open = [&r2](const route::RouteResult::Unrouted& u) {
+          for (const auto& v : r2.unrouted) {
+            if (v.net != u.net) continue;
+            if (v.pad_a == u.pad_a && v.pad_b == u.pad_b) return true;
+            if (u.pad_b >= 0 && v.pad_a == u.pad_b && v.pad_b == u.pad_a) return true;
+            if (u.pad_b < 0 && v.pad_a == u.pad_a) return true;
+          }
+          return false;
+        };
+        std::vector<route::RouteResult::Unrouted> remaining;
+        for (const auto& u : res.unrouted)
+          if (still_open(u)) remaining.push_back(u);
+        res.unrouted = std::move(remaining);
+        res.routed = res.connections - static_cast<int>(res.unrouted.size());
         unconnected_after_refill = after;
         filled_now = std::move(refilled_again);
       }
@@ -2255,8 +2283,13 @@ RouteJobResult run_route_job(RouteJob job) {
       log("  cannot connect: " + e.text);
       nlohmann::json walls = nlohmann::json::array();
       for (const auto& w : e.walls) walls.push_back(w);
+      nlohmann::json wis = nlohmann::json::array();
+      for (const auto& wi : e.wall_items) {
+        const std::string wn = wi.net > 0 && static_cast<std::size_t>(wi.net) < lb.board.nets.size() ? lb.board.nets[static_cast<std::size_t>(wi.net)].name : std::string();
+        wis.push_back({{"kind", drc::kind_name(static_cast<drc::ItemKind>(wi.kind))}, {"index", wi.index}, {"net", wn}});
+      }
       proved.push_back({{"pin", analysis::pad_label(lb.board, p)}, {"net", lb.board.nets[static_cast<std::size_t>(lb.board.pads[static_cast<std::size_t>(p)].net)].name},
-                        {"width_mm", nm_to_mm(e.width)}, {"via_in_pad_fits", e.via_in_pad_fits}, {"walls", walls},
+                        {"width_mm", nm_to_mm(e.width)}, {"via_in_pad_fits", e.via_in_pad_fits}, {"walls", walls}, {"wall_items", wis},
                         {"text", e.text}});
     }
     const double why_s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_why).count();
@@ -2310,9 +2343,10 @@ RouteJobResult run_route_job(RouteJob job) {
   if (!job.items_out.empty()) std::ofstream(job.items_out) << out.items.dump();
   out.summary = {{"routed", res.routed},     {"connections", res.connections}, {"tracks", res.tracks.size()},
                  {"vias", res.vias.size()},  {"seconds", job_seconds},         {"variant_seconds", res.seconds},
-                 {"expansions", res.expansions}, {"pitch_mm", nm_to_mm(res.pitch)}, {"failures", res.failures},
+                 {"expansions", res.expansions}, {"work_accounting_version", tmk::kWorkAccountingVersion},
+                 {"pitch_mm", nm_to_mm(res.pitch)}, {"failures", res.failures},
                  {"variant", best_index}, {"variant_name", best_name}, {"escape_corridors", res.escape_corridors},
-                 {"escape_corridor_mm", res.escape_corridor_mm}, {"package_pin_edges", res.package_pin_edges}, {"line_crossings", res.line_crossings}, {"escape_reclaimed", res.escape_reclaimed},
+                 {"escape_corridor_mm", res.escape_corridor_mm}, {"package_pin_edges", res.package_pin_edges}, {"line_crossings", res.line_crossings}, {"escape_reclaimed", res.escape_reclaimed}, {"escape_released_open", res.escape_released_open},
                  {"bundle_groups", res.bundle_groups}, {"bundle_spines", res.bundle_spines}, {"bundle_conns", res.bundle_conns}, {"bundle_lanes", res.bundle_lanes}, {"tunnels", res.tunnels}};
   if (!variant_rows.empty()) out.summary["variants"] = std::move(variant_rows);
   {  // Stage 2B #18: where the job's wall time went, plus the process peak RSS. `other` is the residual
@@ -2369,10 +2403,15 @@ RouteJobResult run_route_job(RouteJob job) {
     log(fmt("differential pairs: %zu wanted, %d coupled pair routes (re-coupling included), %ld work units", want.size(), res.pairs, res.pair_work) +
         (res.pairs_over_share > 0 ? fmt(", %d attempts left to single routing (--pair-share)", res.pairs_over_share) : std::string()));
     if (res.pair_retried > 0) log(fmt("  %d of them coupled by the wider retry (--pair-retry-leg-mm)", res.pair_retried));
+    if (res.pair_negotiated > 0) log(fmt("  %d of them coupled by negotiation (--pair-negotiate)", res.pair_negotiated));
     out.summary["pair_work"] = res.pair_work;
+    out.summary["pair_void_samples"] = res.pair_void_samples;
     for (const auto& [na, nb] : want) {
       const auto pr = route::pair_rule(lb.board, rules, re, na, nb);
-      const auto st = route::measure_pair(res.tracks, res.vias, na, nb, route::coupled_threshold(pr));
+      std::vector<Coord> thr_on;  // per-layer coupled thresholds (issue 61)
+      for (int l = 0; l < lb.board.copper_count(); ++l)
+        thr_on.push_back(route::coupled_threshold(route::pair_rule(lb.board, rules, re, na, nb, 0, lb.board.copper_name(l))));
+      const auto st = route::measure_pair(res.tracks, res.vias, na, nb, thr_on, route::coupled_threshold(pr));
       const std::string& a = lb.board.nets[static_cast<std::size_t>(na)].name;
       const std::string& b = lb.board.nets[static_cast<std::size_t>(nb)].name;
       log(fmt("  %s / %s: %.1f mm, coupled %.0f %%, gap %.3f mm (target %.3f, %s), skew %.3f mm, vias %d/%d", a.c_str(), b.c_str(),
@@ -2464,6 +2503,7 @@ RouteJobResult run_route_job(RouteJob job) {
     }
     out.summary["open_connections"] = std::move(open);
     out.summary["exit_code"] = out.exit_code();
+    out.summary["exit_reason"] = out.exit_reason();  // issue 43: which cause decided the exit code
     if (job.route_open_only) {
       out.summary["route_open_only"] = true;
       out.summary["open_at_start"] = res.connections;  // the input's ratsnest: connections is a property of the board as read, unchanged by the stages
@@ -2639,7 +2679,7 @@ RouteJobResult run_layer_advisor(RouteJob job, std::vector<int> counts) {
   return std::move(*best);
 }
 
-RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool masks_rung, bool fresh_rung, bool chains_rung, bool guard_walls) {
+RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool masks_rung, bool fresh_rung, bool chains_rung, bool guard_walls, bool rip_walls) {
   namespace fs = std::filesystem;
   auto log = [&](const std::string& line) {
     if (job.log) job.log(line);
@@ -2689,10 +2729,13 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
   int best_walled = 0;              // the guard's wall price of the best board so far (guard_walls only)
   bool best_walled_proved = false;  // best_walled is a proof over the current best board (guard_walls only)
   bool best_fit = false;            // the best board was produced under rules fitted from the input (a kept fit rung)
+  bool best_masks = false;          // the best board was produced with pad mask openings open to tracks (a kept masks rung)
+  int best_layers = 0;              // the copper layer count the best board was produced at (0: the board count itself)
   // A wall proof over a board file itself: a minimal route job whose why_open classifies the board's own open
   // pins against its own copper, at its own layer count. Used after a kept chains rung -- the one rung kind that
-  // changes the best board without running a route, so no rung summary carries its walls (hardening #8).
-  auto prove_walls = [&](const std::string& board_file) -> std::optional<int> {
+  // changes the best board without running a route, so no rung summary carries its walls (hardening #8) -- and
+  // by the rip-walls phase, which needs the proved entries themselves, not just the count.
+  auto prove_board = [&](const std::string& board_file) -> std::optional<nlohmann::json> {
     RouteJob pj = job;
     const std::string proof_out = stem.string() + ".proof.kicad_pcb";
     pj.in = board_file;
@@ -2702,7 +2745,7 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
     pj.hold = false;
     pj.reroute = false;
     pj.warm_pcb.clear();
-    pj.copper_layers = 0;
+    pj.copper_layers = best_layers;
     pj.repair = "off";
     pj.rescue = false;
     pj.why_open = true;
@@ -2711,13 +2754,35 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
     // proof fits from the original input too (the rungs fit from job.in, never from a rung's own copper). A
     // job-level fit_rules_from already rides along in the copy and is left alone, as the rungs leave it.
     if (best_fit && pj.fit_rules_from.empty()) pj.fit_rules_from = job.in;
+    if (best_masks) pj.opt.soft_pad_masks = true;  // proof the board under the mask rule that produced it
     pj.opt.work_budget = 1;
+    // A proof is minimal and invisible: none of the run search shaping rides along in the copy. Left in,
+    // --relax would ignore the work budget (the relax path runs on round_work x rounds, not work_budget),
+    // --heartbeat would rewrite the progress file mid-finish with the proof state, and the scoped-reroute
+    // and pour lists would re-apply to a board that is only being measured.
+    pj.opt.relax = false;
+    pj.opt.rounds = 0;
+    pj.opt.round_work = 0;
+    pj.opt.halving = false;
+    pj.variants = 1;
+    pj.deterministic_mode = false;
+    pj.heartbeat_out.clear();
+    pj.reroute_nets.clear();
+    pj.reroute_window.clear();
+    pj.pours.clear();
     pj.log = nullptr;
     RouteJobResult pr = run_route_job(std::move(pj));
     remove_tmp(proof_out);
-    if (pr.summary.contains("why_open")) return pr.summary["why_open"].value("walled_in", 0);
-    if (pr.result.connections > 0 && pr.result.routed >= pr.result.connections) return 0;
+    if (pr.summary.contains("why_open")) return pr.summary["why_open"];
+    if (pr.result.connections > 0 && pr.result.routed >= pr.result.connections)
+      return nlohmann::json{{"walled_in", 0}, {"proved", nlohmann::json::array()}};
     return std::nullopt;
+  };
+  // The walled count alone (the chains rung re-pricing, above).
+  auto prove_walls = [&](const std::string& board_file) -> std::optional<int> {
+    const auto p = prove_board(board_file);
+    if (!p) return std::nullopt;
+    return p->value("walled_in", 0);
   };
   bool any_time_limited = false, any_kb_used = false, all_deterministic = true, any_stopped_early = false;  // over every rung tried
   for (std::size_t k = 0; k < rungs.size(); ++k) {
@@ -2728,6 +2793,7 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
       const auto t0 = std::chrono::steady_clock::now();
       ChainsOptions co;
       co.seed = job.opt.seed;
+      co.threads = std::max(1, job.threads);  // the rung honours the job cap (issue 49)
       co.apply_out = tmp;
       const nlohmann::json cj = measure_chains(best_tmp, co, false);
       const auto& ap = cj["applied"];
@@ -2761,7 +2827,15 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
         best->summary.erase("failures");
         best->summary.erase("open_connections");  // chains moved copper without a route: the previous rung's per-connection detail is stale too
         best->summary.erase("rerouted");  // the rip belongs to the first rung's input, not to the board the chains finished
-        best->summary["exit_code"] = open == 0 ? 0 : 3;
+        // The struct follows the summary (issue 55): the process exit code is main's
+        // run_finish(...).exit_code() over these fields, and exit_reason reads them too -
+        // patching only the summary left the process exiting 3 under a summary claiming 0.
+        // Chains is not a refill, so the previous board's refill count must not stand.
+        best->result.routed = conns - open;
+        best->unconnected_after_refill = -1;
+        if (best->summary.contains("unconnected_after_refill")) best->summary.erase("unconnected_after_refill");
+        best->summary["exit_code"] = best->exit_code();
+        best->summary["exit_reason"] = best->exit_reason();
         fs::copy_file(best_tmp, final_out, fs::copy_options::overwrite_existing);
         copy_project_files(job.in, final_out);
       } else {
@@ -2782,6 +2856,8 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
     if (best && !rg.fresh) {
       j.in = best_tmp;
       j.reroute = false;  // what the rungs before routed stays
+      j.reroute_nets.clear();    // the scoped strip was consumed on the original board (issue 46)
+      j.reroute_window.clear();
       j.warm_pcb.clear();
     }
     if (rg.fit) {
@@ -2826,6 +2902,8 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
       best_tmp = tmp;
       best_open = open;
       best_fit = rg.fit;
+      best_masks = rg.masks;
+      best_layers = rg.layers;
       if (guard_walls) {
         // The rung's walled prices the board it produced, which is now the best board: adopt it as its price.
         if (open == 0) {
@@ -2847,6 +2925,274 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
     }
     if (best_open == 0) break;
   }
+  // DR-22 Tier 2-prime (--finish-rip-walls): after the rungs, free the pins the best board walls in with its own
+  // routed copper. Each round proofs the best board and builds two rip sets from the items the proof names
+  // (issue 47): the minimal set - the named items, with a coupled pair's wall item closed over both halves'
+  // branches so a pair is never split by the rip - and the peeled set, which also pulls the stubs the rip
+  // severs on single-ended nets back towards their pins (a bounded topological peel along the trace chain,
+  // never a spatial window: a window rips healthy neighbours with the blockers, and one heal pass cannot
+  // re-pack the crater). The peeled set is tried first; when it wins nothing and ripped more than the
+  // minimal set, the round retries with the minimal set, so a round can do no worse than the surgical rip.
+  // A kept round's heal has its dead antennas peeled before it is priced. A round is kept only when
+  // (open, walled) improves lexicographically (issue 57): never a routed connection for wall count. Locked
+  // copper is never ripped. At most 4 rounds; a round that frees nothing or wins nothing ends the phase.
+  if (rip_walls && best && best_open > 0) {
+    const auto rules = io::read_design_rules(best_tmp);
+    auto graph_kind = [](int item_kind) {  // drc::ItemKind -> copper graph kind (0 track, 1 via); -1: arcs are stops, not graph items
+      return item_kind == static_cast<int>(drc::ItemKind::Track) ? 0 : item_kind == static_cast<int>(drc::ItemKind::Via) ? 1 : -1;
+    };
+    auto item_kind_of = [](int gk) { return gk == 0 ? static_cast<int>(drc::ItemKind::Track) : static_cast<int>(drc::ItemKind::Via); };
+    for (int round = 1; round <= 4 && best_open > 0; ++round) {
+      const auto proof = prove_board(best_tmp);
+      if (!proof || !proof->contains("proved")) break;
+      const int walled_before = proof->value("walled_in", 0);
+      best_walled = walled_before;      // the proof ran: its price is the finish price even if the round is discarded (issue 48)
+      best_walled_proved = true;
+      auto lb = io::read_board_file(best_tmp);
+      drc::RuleEngine re(lb.board, rules);
+      // The proof's wall items, grouped by the pin they wall in; a group's pin anchors its peel (step B).
+      struct WallGroup {
+        geom::Point pin{};
+        bool pin_found = false;
+        std::set<std::pair<int, int>> items;  // (ItemKind, board index)
+      };
+      std::vector<WallGroup> groups;
+      std::set<std::pair<int, int>> named;
+      for (const auto& pe : (*proof)["proved"]) {
+        WallGroup g;
+        const std::string pin = pe.value("pin", "");
+        for (std::size_t i = 0; i < lb.board.pads.size(); ++i)
+          if (analysis::pad_label(lb.board, static_cast<int>(i)) == pin) { g.pin = lb.board.pads[i].pos; g.pin_found = true; break; }
+        for (const auto& wi : pe["wall_items"]) {
+          const std::string kind = wi.value("kind", "");
+          const int k = kind == "Track" ? static_cast<int>(drc::ItemKind::Track)
+                        : kind == "Arc"   ? static_cast<int>(drc::ItemKind::Arc)
+                        : kind == "Via"   ? static_cast<int>(drc::ItemKind::Via)
+                                          : -1;
+          const int idx = wi.value("index", -1);
+          if (k >= 0 && idx >= 0) { g.items.insert({k, idx}); named.insert({k, idx}); }
+        }
+        if (!g.pin_found && !g.items.empty()) {  // fall back to the first wall item's position
+          const auto& [k, idx] = *g.items.begin();
+          const auto i = static_cast<std::size_t>(idx);
+          if (k == static_cast<int>(drc::ItemKind::Track)) g.pin = lb.board.tracks[i].a;
+          else if (k == static_cast<int>(drc::ItemKind::Via)) g.pin = lb.board.vias[i].pos;
+          else g.pin = lb.board.arcs[i].a;
+          g.pin_found = true;
+        }
+        if (!g.items.empty()) groups.push_back(std::move(g));
+      }
+      if (named.empty()) break;
+      auto net_of = [&](const std::pair<int, int>& it) -> model::NetId {
+        const auto i = static_cast<std::size_t>(it.second);
+        if (it.first == static_cast<int>(drc::ItemKind::Track)) return lb.board.tracks[i].net;
+        if (it.first == static_cast<int>(drc::ItemKind::Via)) return lb.board.vias[i].net;
+        if (it.first == static_cast<int>(drc::ItemKind::Arc)) return lb.board.arcs[i].net;
+        return 0;
+      };
+      // rip_minimal (issue 47 step A): the named items; a wall item of a coupled pair is closed over the
+      // branches of both halves, so the heal re-routes the pair coupled instead of healing a snipped half
+      // single-ended. When either half's branch holds a fixed item, neither half is ripped - the seed item
+      // itself stays, so a locked pair is never split.
+      std::set<std::pair<int, int>> rip_min = named;
+      for (const auto& g : groups) {
+        for (const auto& it : g.items) {
+          const int gk = graph_kind(it.first);
+          if (gk < 0) continue;
+          const model::NetId n = net_of(it);
+          const model::NetId p = n > 0 ? re.dp_partner(n) : 0;
+          if (p <= 0 || !re.coupled_diff_pair(n, p)) continue;
+          const auto branch_n = passes::branch_of(lb.board, gk, it.second);
+          if (branch_n.empty()) { rip_min.erase(it); continue; }
+          const route::PairRule pr = route::pair_rule(lb.board, rules, re, n, p);
+          const Coord reach = route::coupled_threshold(pr) + pr.via_offset;
+          std::set<std::pair<int, int>> partner_items;
+          bool partner_fixed = false;
+          for (const auto& [bk, bi] : branch_n) {
+            std::vector<geom::Point> spots;
+            if (bk == 0) {
+              const auto& t = lb.board.tracks[static_cast<std::size_t>(bi)];
+              spots = {t.a, geom::Point{(t.a.x + t.b.x) / 2, (t.a.y + t.b.y) / 2}, t.b};
+            } else {
+              spots = {lb.board.vias[static_cast<std::size_t>(bi)].pos};
+            }
+            for (const geom::Point e : spots) {
+              for (const auto& y : passes::items_within(lb.board, e, reach, p)) {
+                const auto branch_p = passes::branch_of(lb.board, y.first, y.second);
+                if (branch_p.empty()) { partner_fixed = true; break; }
+                partner_items.insert(branch_p.begin(), branch_p.end());
+              }
+              if (partner_fixed) break;
+            }
+            if (partner_fixed) break;
+          }
+          if (partner_fixed) { rip_min.erase(it); continue; }
+          for (const auto& [bk, bi] : branch_n) rip_min.insert({item_kind_of(bk), bi});
+          for (const auto& [bk, bi] : partner_items) rip_min.insert({item_kind_of(bk), bi});
+        }
+      }
+      // rip_peeled (step B): the minimal set plus what lifting it leaves dangling on single-ended nets,
+      // peeled along the trace chain only, each item within 1 mm of a pin walled in this round.
+      std::set<std::pair<int, int>> rip_peel = rip_min;
+      {
+        std::set<model::NetId> pair_nets;
+        for (std::size_t n = 1; n < lb.board.nets.size(); ++n) {
+          const model::NetId pn = static_cast<model::NetId>(n);
+          const model::NetId p = re.dp_partner(pn);
+          if (p > 0 && re.coupled_diff_pair(pn, p)) pair_nets.insert(pn);
+        }
+        std::vector<std::pair<int, int>> lifted;
+        std::vector<geom::Point> anchors;
+        for (const auto& it : rip_min) {
+          const int gk = graph_kind(it.first);
+          if (gk >= 0) lifted.emplace_back(gk, it.second);
+        }
+        for (const auto& g : groups) anchors.push_back(g.pin);
+        for (const auto& [gk, gi] : passes::prune_lift_bounded(lb.board, lifted, anchors, 1'000'000, pair_nets))
+          rip_peel.insert({item_kind_of(gk), gi});
+      }
+      // One attempt: rip `rip` from the best board, heal it, peel the heal's dead antennas, price the
+      // result, and adopt it when the price improves. Returns true when the attempt was kept.
+      auto attempt = [&](const std::set<std::pair<int, int>>& rip, const char* tag) -> bool {
+        auto lb2 = io::read_board_file(best_tmp);
+        io::BoardEditor ed(lb2, job.opt.seed);
+        int ripped = 0, locked_kept = 0;
+        std::set<model::NetId> rip_nets;
+        for (const auto& [kind, idx] : rip) {
+          if (idx < 0) continue;
+          const auto i = static_cast<std::size_t>(idx);
+          if (kind == static_cast<int>(drc::ItemKind::Track) && i < lb2.board.tracks.size()) {
+            if (lb2.board.tracks[i].locked) { ++locked_kept; continue; }
+            rip_nets.insert(lb2.board.tracks[i].net);
+            ed.remove_track(i);
+            ++ripped;
+          } else if (kind == static_cast<int>(drc::ItemKind::Arc) && i < lb2.board.arcs.size()) {
+            if (lb2.board.arcs[i].locked) { ++locked_kept; continue; }
+            rip_nets.insert(lb2.board.arcs[i].net);
+            ed.remove_arc(i);
+            ++ripped;
+          } else if (kind == static_cast<int>(drc::ItemKind::Via) && i < lb2.board.vias.size()) {
+            if (lb2.board.vias[i].locked) { ++locked_kept; continue; }
+            rip_nets.insert(lb2.board.vias[i].net);
+            ed.remove_via(i);
+            ++ripped;
+          }
+        }
+        log(fmt("finish: rip-walls round %d (%s): the proof names %zu walling item(s); ripping %d (%d locked kept)", round, tag, named.size(), ripped, locked_kept));
+        if (ripped == 0) return false;
+        const std::string ripped_file = stem.string() + fmt(".finish-rip-%d.kicad_pcb", round);
+        ed.save(ripped_file);
+        copy_project_files(best_tmp, ripped_file);
+        const std::string tmp = tmp_of(100 + round);
+        RouteJob j = job;
+        j.in = ripped_file;
+        j.out = tmp;
+        j.json_out.clear();
+        j.items_out.clear();
+        j.hold = false;
+        j.reroute = false;
+        j.reroute_nets.clear();    // the heal routes the ripped board as it stands (issue 46)
+        j.reroute_window.clear();
+        j.warm_pcb.clear();
+        j.copper_layers = best_layers;
+        if (best_masks) j.opt.soft_pad_masks = true;
+        j.why_open = true;
+        j.why_open_output = true;
+        if (best_fit) {
+          if (j.fit_rules_from.empty()) j.fit_rules_from = job.in;
+          j.repair = "on";
+          j.repair_opt.select = "both";
+          j.repair_opt.focus = true;
+        }
+        const auto t0 = std::chrono::steady_clock::now();
+        RouteJobResult r = run_route_job(std::move(j));
+        const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        const int open = r.unconnected_after_refill >= 0 ? r.unconnected_after_refill : r.result.connections - r.result.routed;
+        int walled = r.summary.contains("why_open") ? r.summary["why_open"].value("walled_in", 0) : 0;
+        // Step C: peel the heal's dead antennas on the ripped nets before pricing. A bypassed stub tail
+        // still touches its source pad, so padless_islands (which cuts only 0-pad islands) leaves it
+        // standing as dangling copper. Peeling a degree-1 end cannot disconnect a pad pair, so `open`
+        // stands; the walled price is re-proved on the peeled board and the summary follows it.
+        int antennas = 0;
+        {
+          auto healed = io::read_board_file(tmp);
+          // Protected (issue 47 step C): copper that was already a dead end on the board entering this
+          // round - that is the user's own stub, not an antenna of this round's making. Copper alive
+          // entering the round and dead on the healed board was severed by the rip and bypassed by the
+          // heal; it is pruned even though its geometry predates the round.
+          std::set<std::tuple<int, int, int, int, int, int>> dead_tracks;
+          std::set<std::tuple<int, int, int, int>> dead_vias;
+          {
+            const auto round_in = io::read_board_file(best_tmp);
+            for (const auto& [k, i] : passes::peel_dead_ends(round_in.board, rip_nets, [](int, int) { return false; })) {
+              if (k == 0) {
+                const auto& t = round_in.board.tracks[static_cast<std::size_t>(i)];
+                dead_tracks.emplace(t.net, t.layer, t.a.x, t.a.y, t.b.x, t.b.y);
+                dead_tracks.emplace(t.net, t.layer, t.b.x, t.b.y, t.a.x, t.a.y);
+              } else {
+                const auto& v = round_in.board.vias[static_cast<std::size_t>(i)];
+                dead_vias.emplace(v.net, v.pos.x, v.pos.y, v.size);
+              }
+            }
+          }
+          auto is_protected = [&](int kind, int idx) {
+            const auto i = static_cast<std::size_t>(idx);
+            if (kind == 0) { const auto& t = healed.board.tracks[i]; return dead_tracks.count({t.net, t.layer, t.a.x, t.a.y, t.b.x, t.b.y}) > 0; }
+            const auto& v = healed.board.vias[i];
+            return dead_vias.count({v.net, v.pos.x, v.pos.y, v.size}) > 0;
+          };
+          const auto dead = passes::peel_dead_ends(healed.board, rip_nets, is_protected);
+          if (!dead.empty()) {
+            io::BoardEditor ed2(healed, job.opt.seed);
+            for (const auto& [gk, gi] : dead) {
+              if (gk == 0) ed2.remove_track(static_cast<std::size_t>(gi));
+              else ed2.remove_via(static_cast<std::size_t>(gi));
+              ++antennas;
+            }
+            ed2.save(tmp);
+            if (const auto p2 = prove_board(tmp); p2) {
+              walled = p2->value("walled_in", walled);
+              r.summary["why_open"] = *p2;
+            }
+          }
+        }
+        if (antennas) log(fmt("finish: rip-walls round %d (%s): peeled %d dead antenna item(s) off the heal", round, tag, antennas));
+        const bool kept = open < best_open || (open == best_open && walled < walled_before);  // lexicographic (issue 57)
+        rows.push_back({{"rung", fmt("rip walls round %d", round)}, {"open_before", best_open}, {"open_after", open},
+                        {"walled_before", walled_before}, {"walled_after", walled}, {"ripped", ripped}, {"kept", kept},
+                        {"copper_layers", r.summary.value("copper_layers", layers0)}, {"seconds", secs}});
+        log(fmt("finish: rip-walls round %d: %d open, %d walled%s", round, open, walled, kept ? "" : " (no better: discarded)"));
+        any_time_limited = any_time_limited || r.summary.value("time_limited", false);
+        any_stopped_early = any_stopped_early || r.summary.value("stopped_early", false);
+        any_kb_used = any_kb_used || r.summary.value("kb_used", false);
+        all_deterministic = all_deterministic && r.summary.value("deterministic", false);
+        remove_tmp(ripped_file);
+        if (kept) {
+          remove_tmp(best_tmp);
+          best = std::move(r);
+          best_tmp = tmp;
+          best_open = open;
+          best_walled = walled;
+          best_walled_proved = true;
+          fs::copy_file(best_tmp, final_out, fs::copy_options::overwrite_existing);
+          copy_project_files(job.in, final_out);
+          return true;
+        }
+        remove_tmp(tmp);
+        return false;
+      };
+      // Step D: the peeled set first; the minimal set is the round's fallback, so the round can do no
+      // worse than the surgical rip alone.
+      bool kept = false;
+      if (rip_peel.size() > rip_min.size()) {
+        kept = attempt(rip_peel, "peeled");
+        if (!kept) kept = attempt(rip_min, "minimal");
+      } else {
+        kept = attempt(rip_min, "minimal");
+      }
+      if (!kept) break;
+    }
+  }
   remove_tmp(best_tmp);
   log(best_open == 0 ? fmt("finish: complete after %zu rung%s; written to %s", rows.size(), rows.size() == 1 ? "" : "s", final_out.c_str())
                      : fmt("finish: %d open after every rung; written to %s", best_open, final_out.c_str()));
@@ -2855,8 +3201,8 @@ RouteJobResult run_finish(RouteJob job, std::vector<int> extra_layers, bool mask
   best->summary["stopped_early"] = any_stopped_early;
   best->summary["kb_used"] = any_kb_used;
   best->summary["deterministic"] = all_deterministic;
-  if (guard_walls && best_walled_proved) best->summary["finish"]["walled_in"] = best_walled;
-  if (guard_walls && !best_walled_proved)
+  if ((guard_walls || rip_walls) && best_walled_proved) best->summary["finish"]["walled_in"] = best_walled;
+  if ((guard_walls || rip_walls) && !best_walled_proved)
     log("finish: walled_in omitted from the summary: no wall proof of the final board could be computed");
   best->summary["run"]["output"] = final_out;
   best->summary["run"]["input"] = job.in;

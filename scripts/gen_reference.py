@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Modifications Copyright (C) 2026 SiliconBrane Inc.
+# Modified 2026 as part of the SiliconBrane fork of TraceMaker:
+# fixed the CLI subcommand parser (CLI11 heading case) and regenerated the CLI reference.
+# The modifications are licensed under GPL-3.0-or-later, the same
+# terms as the original work. The original copyright notice above
+# remains in force for the original portions of this file.
+
 """Generates the reference pages of the documentation site that must never drift from the code (D134).
 
   scripts/gen_reference.py cli   --build build/release [--check]   # docs/reference/cli.md from the programs' --help

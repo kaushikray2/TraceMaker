@@ -1,3 +1,9 @@
+# Modifications Copyright (C) 2026 SiliconBrane Inc.
+# Modified 2026 as part of the SiliconBrane fork of TraceMaker:
+# registered the batch, deterministic, exit-code, heartbeat, reroute-scope, route-open-only, seed-determinism and finish-rip-walls tests.
+# The modifications are licensed under GPL-3.0-or-later, the same
+# terms as the original work.
+
 find_package(Catch2 3 REQUIRED)
 include(Catch)
 
@@ -62,6 +68,22 @@ add_test(NAME deterministic_mode COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/int
 add_test(NAME heartbeat COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration/heartbeat.py $<TARGET_FILE:tracemaker> ${CMAKE_BINARY_DIR}/integration/heartbeat)
 add_test(NAME exit_codes COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration/exit_codes.py $<TARGET_FILE:tracemaker> ${CMAKE_BINARY_DIR}/integration/exit_codes)
 add_test(NAME route_open_only COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration/route_open_only.py $<TARGET_FILE:tracemaker> ${CMAKE_BINARY_DIR}/integration/route_open_only)
+add_test(NAME finish_rip_walls COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration/finish_rip_walls.py $<TARGET_FILE:tracemaker> ${CMAKE_BINARY_DIR}/integration/finish_rip_walls)
+set_tests_properties(finish_rip_walls PROPERTIES SKIP_RETURN_CODE 77 LABELS "route;integration" TIMEOUT 1200 PROCESSORS 8)
+add_test(NAME pair_void COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration/pair_void.py $<TARGET_FILE:tracemaker> ${CMAKE_BINARY_DIR}/integration/pair_void)
+set_tests_properties(pair_void PROPERTIES SKIP_RETURN_CODE 77 LABELS "route;integration" TIMEOUT 600 PROCESSORS 8)
+add_test(NAME pair_micro COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration/pair_micro.py $<TARGET_FILE:tracemaker> ${CMAKE_BINARY_DIR}/integration/pair_micro)
+set_tests_properties(pair_micro PROPERTIES SKIP_RETURN_CODE 77 LABELS "route;integration" TIMEOUT 600 PROCESSORS 8)
+add_test(NAME pair_negotiate COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration/pair_negotiate.py $<TARGET_FILE:tracemaker> ${CMAKE_BINARY_DIR}/integration/pair_negotiate)
+set_tests_properties(pair_negotiate PROPERTIES SKIP_RETURN_CODE 77 LABELS "route;integration" TIMEOUT 900 PROCESSORS 8)
+add_test(NAME chains_clique COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration/chains_clique.py $<TARGET_FILE:tracemaker> ${CMAKE_BINARY_DIR}/integration/chains_clique)
+set_tests_properties(chains_clique PROPERTIES SKIP_RETURN_CODE 77 LABELS "route;integration" TIMEOUT 1200 PROCESSORS 8)
+add_test(NAME chains_arcs COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration/chains_arcs.py $<TARGET_FILE:tracemaker> ${CMAKE_BINARY_DIR}/integration/chains_arcs)
+set_tests_properties(chains_arcs PROPERTIES LABELS "route;integration" TIMEOUT 300)
+add_test(NAME chains_clique_pair COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration/chains_clique_pair.py $<TARGET_FILE:tracemaker> ${CMAKE_BINARY_DIR}/integration/chains_clique_pair)
+set_tests_properties(chains_clique_pair PROPERTIES LABELS "route;integration" TIMEOUT 300)
+add_test(NAME escape_release COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration/escape_release.py $<TARGET_FILE:tracemaker> ${CMAKE_BINARY_DIR}/integration/escape_release)
+set_tests_properties(escape_release PROPERTIES SKIP_RETURN_CODE 77 LABELS "route;integration" TIMEOUT 1200 PROCESSORS 8)
 add_test(NAME reroute_scope COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration/reroute_scope.py $<TARGET_FILE:tracemaker> ${CMAKE_BINARY_DIR}/integration/reroute_scope)
 add_test(NAME batch_mode COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration/batch_mode.py $<TARGET_FILE:tracemaker> ${CMAKE_BINARY_DIR}/integration/batch_mode)
 set_tests_properties(batch_mode PROPERTIES SKIP_RETURN_CODE 77 LABELS "route;integration" TIMEOUT 900 PROCESSORS 8)
@@ -153,3 +175,7 @@ add_test(NAME daemon_cli COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration
 set_tests_properties(daemon_cli PROPERTIES LABELS "integration;session" TIMEOUT 600)
 add_test(NAME live_status COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration/live_status.py $<TARGET_FILE:tracemaker> ${CMAKE_BINARY_DIR}/integration/live_status)
 set_tests_properties(live_status PROPERTIES LABELS "integration" TIMEOUT 120)
+add_test(NAME perlayer_widths COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration/perlayer_widths.py $<TARGET_FILE:tracemaker> ${CMAKE_BINARY_DIR}/integration/perlayer)
+set_tests_properties(perlayer_widths PROPERTIES LABELS "route;integration" TIMEOUT 300)
+add_test(NAME cache_profile COMMAND python3 ${PROJECT_SOURCE_DIR}/tests/integration/cache_profile.py $<TARGET_FILE:tracemaker> ${CMAKE_BINARY_DIR}/integration/cache_profile)
+set_tests_properties(cache_profile PROPERTIES LABELS "route;integration" TIMEOUT 300)

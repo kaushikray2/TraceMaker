@@ -1,4 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Modifications Copyright (C) 2026 SiliconBrane Inc.
+// Modified 2026 as part of the SiliconBrane fork of TraceMaker:
+// added remove_arc for the finish rip-walls rounds.
+// The modifications are licensed under GPL-3.0-or-later, the same
+// terms as the original work. The original copyright notice above
+// remains in force for the original portions of this file.
+
 #include "io/kicad/board_editor.hpp"
 
 #include <charconv>
@@ -93,6 +100,7 @@ void BoardEditor::add_via(const model::Via& v) {
 
 void BoardEditor::remove_track(std::size_t index) { lb_.doc.remove(lb_.board.tracks.at(index).node); }
 void BoardEditor::remove_via(std::size_t index) { lb_.doc.remove(lb_.board.vias.at(index).node); }
+void BoardEditor::remove_arc(std::size_t index) { lb_.doc.remove(lb_.board.arcs.at(index).node); }
 
 void BoardEditor::move_footprint(std::size_t index, model::Point pos, double angle) {
   auto& doc = lb_.doc;

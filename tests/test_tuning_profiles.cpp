@@ -143,7 +143,9 @@ TEST_CASE("route: a profiled net has its profile's width on each layer", "[tunin
     inner += t.layer == 1 || t.layer == 2;
   }
   CHECK(inner > 0);
-  CHECK(r.summary["tuning_profiles"][0]["tracks_narrowed"] == inner);
+  // Per-layer routing (issue 37): the search now lays each track at its layer width natively, so the
+  // widest-then-narrow post-pass has nothing to narrow on a search-laid profile net.
+  CHECK(r.summary["tuning_profiles"][0]["tracks_narrowed"] == 0);
   CHECK(r.summary["tuning_profiles"][0]["route_width_mm"] == 0.15);
   CHECK(r.summary["tuning_profiles"][0]["layers_without_tracks"].empty());
   // The written board passes the project's own rules, the profile's included.

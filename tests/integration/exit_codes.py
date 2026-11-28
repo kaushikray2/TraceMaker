@@ -1,4 +1,23 @@
 #!/usr/bin/env python3
+# Copyright (C) 2026 SiliconBrane Inc.
+#
+# This file is part of TraceMaker (SiliconBrane fork).
+#
+# TraceMaker is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# TraceMaker is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with TraceMaker. If not, see <https://www.gnu.org/licenses/>.
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Trustworthy exit codes + structured failures (Tier 1 ask #4).
 
@@ -55,6 +74,7 @@ def main():
     check(p.returncode == 0, f"complete: rc {p.returncode} != 0: {p.stderr[-500:]}")
     s = json.loads(js.read_text())
     check(s.get("exit_code") == 0, f"complete: summary exit_code {s.get('exit_code')} != 0")
+    check(s.get("exit_reason") == "complete", f"complete: summary exit_reason {s.get('exit_reason')} != complete")
     check(s.get("open_connections") == [], f"complete: open_connections not empty: {s.get('open_connections')}")
     print(f"complete: rc 0, {s['routed']}/{s['connections']} routed")
 
@@ -64,6 +84,11 @@ def main():
     check(p.returncode == 3, f"partial: rc {p.returncode} != 3: {p.stderr[-500:]}")
     s = json.loads(js.read_text())
     check(s.get("exit_code") == 3, f"partial: summary exit_code {s.get('exit_code')} != 3")
+    # Issue 54: partial ran WITH --soft-zones and has genuine opens, so the reason is
+    # open_connections - the refill count also counts these very pads and must not turn
+    # the reason into unconnected_after_refill. (Before the fix this case asserted the
+    # buggy mirror of the refill count.)
+    check(s.get("exit_reason") == "open_connections", f"partial: summary exit_reason {s.get('exit_reason')} != open_connections")
     oc = s.get("open_connections")
     check(isinstance(oc, list) and len(oc) == s["connections"] - s["routed"] and len(oc) > 0,
           f"partial: open_connections does not match the open count: {oc}")

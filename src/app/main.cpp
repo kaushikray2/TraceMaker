@@ -1,4 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+// Modifications Copyright (C) 2026 SiliconBrane Inc.
+// Modified 2026 as part of the SiliconBrane fork of TraceMaker:
+// added the route-batch subcommand, --deterministic, --route-open-only, scoped --reroute-net/--reroute-window and --finish-rip-walls CLI surface.
+// The modifications are licensed under GPL-3.0-or-later, the same
+// terms as the original work. The original copyright notice above
+// remains in force for the original portions of this file.
+
 // tracemaker: command-line front end. Subcommands grow with the roadmap (route, place, bench, serve, replay).
 #include <CLI/CLI.hpp>
 #include <fcntl.h>
@@ -439,7 +446,10 @@ int cmd_pairs(const std::string& path, const std::vector<std::string>& extra, co
   std::printf("%-28s %9s %9s %8s %9s %9s %8s %5s\n", "pair", "len_mm", "coupled", "gap_mm", "gap_min", "target", "skew_mm", "vias");
   for (const auto& [na, nb] : pairs) {
     const auto pr = tmk::route::pair_rule(b, rules, obs.rules(), na, nb);
-    const auto st = tmk::route::measure_pair(b.tracks, b.vias, na, nb, tmk::route::coupled_threshold(pr));
+    std::vector<tmk::Coord> thr_on;  // per-layer coupled thresholds (issue 61)
+    for (int l = 0; l < b.copper_count(); ++l)
+      thr_on.push_back(tmk::route::coupled_threshold(tmk::route::pair_rule(b, rules, obs.rules(), na, nb, 0, b.copper_name(l))));
+    const auto st = tmk::route::measure_pair(b.tracks, b.vias, na, nb, thr_on, tmk::route::coupled_threshold(pr));
     const std::string name = b.nets[static_cast<std::size_t>(na)].name + " / " + b.nets[static_cast<std::size_t>(nb)].name;
     std::printf("%-28s %9.2f %8.1f%% %8.3f %9.3f %9.3f %8.3f %2d/%-2d\n", name.c_str(), (st.length_a + st.length_b) / 2e6, 100 * st.coupled_share(),
                 st.gap_median / 1e6, st.gap_min / 1e6, tmk::nm_to_mm(pr.gap), st.skew() / 1e6, st.vias_a, st.vias_b);
@@ -1151,7 +1161,13 @@ static int run_main(int argc, char** argv) {
   route->add_option("--time", ropt.time_limit_s, "Time limit, seconds (safety net; results then depend on machine speed)");
   route->add_option("--work", ropt.work_budget,
                     "Deterministic work budget in search expansions per router (e.g. 50000000); with the default portfolio every "
-                    "variant gets the whole budget, so a run does up to --variants times this work");
+                    "variant gets the whole budget, so a run does up to --variants times this work. Work accounting version 2: "
+                    "an expansion covers more than under version 1 (the upstream 0.12.1 accounting) - pair leg checks and the "
+                    "via-shove / pin-rescue work are folded into the count - so a budget calibrated under version 1 needs "
+                    "roughly twice the value for the same reach (measured on the Nomad reference fixture: the baseline that "
+                    "20000000 met under version 1 needs 40000000 under version 2). --deterministic also suppresses the "
+                    "knowledge base, which changes the effective reach at the same budget. The accounting version is emitted "
+                    "as work_accounting_version in the route JSON.");
   route->add_option("--pitch-um", r_pitch_um, "Lattice pitch in micrometres (default: automatic)");
   route->add_option("--pitch-scale", ropt.pitch_scale_all, "Experiment: multiply the automatic lattice pitch by this on every board and variant")
       ->check(CLI::Range(0.1, 4.0))
@@ -1263,6 +1279,7 @@ static int run_main(int argc, char** argv) {
   route->add_option("--pair-leg-mm", r_pair_leg_mm, "Coupled pairs: longest reach of the uncoupled legs from the pads to the coupled section (default 2.5)")
       ->check(CLI::Range(0.6, 50.0));
   route->add_flag("--protect-coupled", ropt.protect_coupled, "Coupled pairs: negotiation never rips a half of a coupled pair (the route that would fails instead)");
+  route->add_flag("--pair-negotiate", ropt.pair_negotiate, "Coupled pairs: when no coupled path exists, try once more letting the pair displace routed connections, kept only if every displaced connection routes again");
   route->add_option("--recouple-work", ropt.recouple_work, "Coupled pairs: work units the clean-up re-coupling of split pairs may spend past the budget (default 2000000, 0 = none)")
       ->check(CLI::NonNegativeNumber);
   double r_pair_retry_leg_mm = 0;
@@ -1280,6 +1297,7 @@ static int run_main(int argc, char** argv) {
   route->add_option("--global-congestion-from", ropt.global_congestion_from, "Congestion threshold, eighths of tile capacity")->group("");
   route->add_option("--global-congestion-pen", ropt.global_congestion_pen, "Congestion cost, pitches per step per eighth above the threshold")->group("");
   route->add_flag("--escape-plan,!--no-escape-plan", ropt.escape_plan, "Reserve escape corridors for the pins of dense packages (QFP, BGA) before routing");
+  route->add_flag("--escape-release-open", ropt.escape_release_open, "With --escape-plan: at the first negotiation pass, give back the corridors of pads no routed connection used (issue 39)");
   route->add_option("--escape-length", ropt.escape_length_mm, "Escape plan: perimeter corridors run this far (mm) past the package edge, as far as no fixed copper is in the way (default 2): bundles of parallel straight escapes")->group("");
   route->add_option("--fanout-heads", ropt.fanout_heads_mm, "Before routing, each perimeter pin of a dense four-sided package gets the first part of its route, this far (mm) past the package: straight, or in staggered 45-degree bundles toward the destinations, whichever a side has room for; fixed copper of the pin's net during routing, not written out (0 = off)")->group("");
   route->add_option("--fanout-heads-min-pins", ropt.fanout_heads_min_pins, "With --fanout-heads: perimeter pins a package needs (default 32)")->group("");
@@ -1444,7 +1462,7 @@ static int run_main(int argc, char** argv) {
   route->add_option("--copper-layers", r_job.copper_layers, "Route with this many copper layers (even): inner layers are added, or empty ones removed, in the output too")
       ->check(CLI::Range(2, 32));
   std::vector<int> r_try_layers;
-  bool r_finish = false, r_finish_masks = false, r_finish_fresh = false, r_finish_chains = false, r_finish_guard_walls = false;
+  bool r_finish = false, r_finish_masks = false, r_finish_fresh = false, r_finish_chains = false, r_finish_guard_walls = false, r_finish_rip_walls = false;
   std::vector<int> r_finish_layers;
   route->add_flag("--finish", r_finish,
                   "Rungs towards a complete board, each on top of the one before (what is routed stays): the run as given; then the open connections "
@@ -1455,6 +1473,8 @@ static int run_main(int argc, char** argv) {
   route->add_flag("--finish-masks", r_finish_masks, "With --finish: a rung after the fitted rules where pad solder-mask openings no longer keep tracks out (--soft-pad-masks)");
   route->add_flag("--finish-guard-walls", r_finish_guard_walls,
                   "With --finish: keep a routing rung only when open + walled-in pins improves (DR-22: a rung's own copper can wall the pins it leaves open in, and no later rung can reach a walled pin; priced from a wall proof over each rung's output board, computed even with --no-why-open). Chains rungs are not priced; a kept one re-prices the best board");
+  route->add_flag("--finish-rip-walls", r_finish_rip_walls,
+                  "With --finish: after the rungs, free pins the best board walls in with its own routed copper (DR-22 Tier 2-prime): proof the best board, rip the wall the proof names (a coupled pair whole over both branches, severed stubs peeled within 1 mm of a walled pin, a wider rip that wins nothing retried with the named items alone, dead antennas pruned off the heal; locked copper is never ripped), route the opened connections on top, and keep a round only when (open, walled) improves lexicographically (issue 57); at most 4 rounds");
   route->add_option("--finish-layers", r_finish_layers, "With --finish: later rungs that add this many copper layers to the board's count (e.g. 2,4); none by default")
       ->delimiter(',');
   route->add_option("--try-layers", r_try_layers,
@@ -1514,7 +1534,11 @@ static int run_main(int argc, char** argv) {
                     "runs, and once more with done: true at the end; for backends polling a long job");
   route->add_option("--heartbeat-s", r_job.heartbeat_s, "Heartbeat interval, seconds (default 10)")->check(CLI::PositiveNumber);
   route->footer("Exit codes: 0 = every connection routed; 3 = the job ran but connections remain open (see open_connections in the "
-                "route JSON); 1 = the job failed to run (unreadable board, refused configuration); 2 = usage error.");
+                "route JSON); 1 = the job failed to run (unreadable board, refused configuration); 2 = usage error. "
+                "The 1/2 boundary is who refuses: syntax and conversion errors from the argument parser (an unknown flag, a "
+                "non-numeric value for a numeric option) exit 2; the binary's own validation refusals exit 1 - "
+                "--deterministic without a work budget, a malformed --reroute-window or --window value, an out-of-range "
+                "value the parser accepts syntactically.");
   route->add_option("--report", r_job.report_out,
                     "Write a run report for designers: what was routed, what is open and why, the rules read and not read, the signal-integrity "
                     "audit, the DRC before and after, the options and the seed. HTML, or Markdown if FILE ends in .md. Every number in it is a "
@@ -1724,6 +1748,10 @@ static int run_main(int argc, char** argv) {
   chains_cmd->add_option("--causes", ch_opt.causes_path, "A `causes` report for this board (tracemaker causes --json): attempt the connections rearrangement can close first, and skip the ones it proves cannot close (no_path_bare, pin_cannot_escape)")->check(CLI::ExistingFile);
   chains_cmd->add_option("--threads", ch_opt.threads, "Open connections measured at once (the result does not depend on it; default 8)")->check(CLI::Range(1, 256));
   chains_cmd->add_option("--seed", ch_opt.seed, "Router seed (default 1)");
+  chains_cmd->add_flag("--clique,!--no-clique", ch_opt.clique, "Phase 3B: on a too_deep / lifted_net_no_path_bare failure, one bounded clique attempt at the root over the nets the chain lifted or blamed (default on)");
+  chains_cmd->add_option("--clique-work", ch_opt.clique_work, "Work budget of the clique portfolio attempt (default 8 M)");
+  chains_cmd->add_option("--clique-variants", ch_opt.clique_variants, "Portfolio variants of the clique attempt (default 6)")->check(CLI::Range(1, 16));
+  chains_cmd->add_option("--clique-max-nets", ch_opt.clique_max_nets, "Clique attempts over more nets than this are not attempted (default 12)")->check(CLI::Range(3, 64));
   chains_cmd->add_flag("--soft-zones", ch_opt.soft_zones, "Zone fills do not block other nets (as route --soft-zones)");
   chains_cmd->add_flag("!--no-fill-planes", ch_opt.fill_planes, "Do not fill zones that have no fill");
   auto* fit_cmd = app.add_subcommand("fit-rules", "Rules a board's own copper breaks, and the values route --fit-rules would relax them to (read-only; doc 20 §2.8)");
@@ -1990,7 +2018,7 @@ static int run_main(int argc, char** argv) {
           std::printf("%s\n", line.c_str());
           std::fflush(stdout);
         };
-        return tmk::app::run_finish(std::move(job), r_finish_layers, r_finish_masks, r_finish_fresh, r_finish_chains, r_finish_guard_walls).exit_code();
+        return tmk::app::run_finish(std::move(job), r_finish_layers, r_finish_masks, r_finish_fresh, r_finish_chains, r_finish_guard_walls, r_finish_rip_walls).exit_code();
       }
       if (!r_try_layers.empty()) {
         if (job.copper_layers > 0) throw std::invalid_argument("--try-layers and --copper-layers: give one");

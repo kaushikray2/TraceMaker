@@ -36,6 +36,13 @@ struct NetClass {
   // as KiCad 10.0.6 applies it, it relaxes the clearance between the coupled halves' tracks only, not between a track and the partner's
   // pads (the class's diff_pair_gap still does that). 0 = none.
   Coord tuning_pair_gap = 0;
+  // Phase 3C-1 (issue 37): per-layer geometry, by copper layer name; empty = the scalars above govern every layer.
+  // Producers: the crules synthetic classes (the impedance solver's per-layer LineSolutions, the current solver's
+  // outer/inner widths). Not a KiCad class field - KiCad expresses per-layer widths in tuning profiles - so, like
+  // tuning_pair_gap, these live only in the working copy and are never written back to the project.
+  std::map<std::string, Coord> track_width_on;
+  std::map<std::string, Coord> diff_pair_width_on;
+  std::map<std::string, Coord> diff_pair_gap_on;
 };
 
 // A KiCad 10 tuning profile (`.kicad_pro` `tuning_profiles`, doc 05 §58): per signal layer the track width and pair gap of the

@@ -5,4 +5,12 @@
 namespace tmk {
 // TraceMaker version string, e.g. "0.1.0".
 std::string_view version();
+
+// What one --work expansion unit covers (issue 41). Version 1 is the upstream 0.12.1 accounting;
+// version 2 folds the pair leg checks and the via-shove / pin-rescue / via-retry work into the
+// expansion count, so a budget calibrated under version 1 buys measurably less search under
+// version 2 (about half the reach on the Nomad reference fixture). Bump this whenever the
+// accounting changes and say so at the --work entry of the CLI reference; it is emitted in the
+// route JSON as work_accounting_version, next to the expansions count.
+inline constexpr int kWorkAccountingVersion = 2;
 }  // namespace tmk

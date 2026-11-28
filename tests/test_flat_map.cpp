@@ -1,3 +1,20 @@
+// Copyright (C) 2026 SiliconBrane Inc.
+//
+// This file is part of TraceMaker (SiliconBrane fork).
+//
+// TraceMaker is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// TraceMaker is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with TraceMaker. If not, see <https://www.gnu.org/licenses/>.
+//
 // SPDX-License-Identifier: GPL-3.0-or-later
 // FlatU64U16 (Stage 2B flat hash maps): differential test against std::unordered_map over
 // randomized insert / find / increment / decay traffic, including key 0 (a real
