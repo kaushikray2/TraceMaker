@@ -185,6 +185,7 @@ struct RouteJob {
   double stitch_pitch_mm = 0;      // 0 = the catalogue's stitch_via_within_mm
   double stitch_distance_mm = 0;   // 0 = the rule's stitch_via_mm, else the catalogue value
   std::vector<std::string> stitch_returns;
+  bool stitch_pair_transitions = false;  // --stitch-pair-transitions (Phase 4C, issue #69): one stitch via per differential-pair layer transition, placed symmetrically between the two signal vias (TI SPRAAR7J section 2)
   long pass_work = 2'000'000;      // work budget of each pass, in exact checks (rule 5)
   // Progress lines (the CLI's stdout text, one line per call, no trailing newline). Empty = silent.
   std::function<void(const std::string&)> log;

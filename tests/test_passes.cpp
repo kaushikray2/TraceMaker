@@ -604,6 +604,82 @@ TEST_CASE("stitch: a signal via gets one plane via within the distance", "[passe
   CHECK(r.returns[0].stitched_after == 0);
 }
 
+TEST_CASE("stitch: a pair transition gets one stitch via on the pair axis", "[passes][stitch]") {
+  // A differential pair (nets 3 and 2) changing layers at (15, 5) and (15, 5.85): the tracks come
+  // in on F.Cu from the west and leave on B.Cu to the south, so the copper east of the transition
+  // is open. TI SPRAAR7J section 2: the stitching via sits symmetrically within the distance of
+  // the signal transition vias — one via for the transition, on the pair axis.
+  const std::string sig = seg(5, 5, 15, 5, 3) + seg(15, 5, 15, 10, 3, 0.2, "B.Cu") +
+                          "  (via (at 15 5) (size 0.6) (drill 0.3) (layers \"F.Cu\" \"B.Cu\") (net 3))\n" +
+                          seg(5, 5.85, 15, 5.85, 2) + seg(15, 5.85, 15, 10.85, 2, 0.2, "B.Cu") +
+                          "  (via (at 15 5.85) (size 0.6) (drill 0.3) (layers \"F.Cu\" \"B.Cu\") (net 2))\n";
+  const auto l = load("pairtrans", board_text(kGndPin + gnd_zone("F.Cu") + gnd_zone("B.Cu") + sig));
+  passes::StitchOptions o;
+  o.returns = {{3, 1, 2 * mm, "option"}, {2, 1, 2 * mm, "option"}};
+  o.pairs = {{3, 2}};
+  o.pair_transitions = true;
+  const auto r = passes::stitch_vias(l.board, l.rules, o);
+  REQUIRE(r.vias.size() == 1);
+  CHECK(r.pair_stitches == 1);
+  CHECK(r.return_path[0] == 1);
+  CHECK(r.vias[0].net == 1);
+  // On the pair axis (the midpoint height), east of the transition: equidistant from both vias.
+  CHECK(r.vias[0].pos == pt(16.235, 5.425));
+  REQUIRE(r.returns.size() == 2);
+  for (const auto& row : r.returns) {
+    CHECK(row.signal_vias == 1);
+    CHECK(row.stitched_before == 0);
+    CHECK(row.stitched_after == 1);
+  }
+  model::Board b = l.board;
+  b.vias.push_back(r.vias[0]);
+  CHECK(errors(drc::refill_zones(b, l.rules).board, l.rules) == 0);
+  // Deterministic.
+  const auto again = passes::stitch_vias(l.board, l.rules, o);
+  REQUIRE(again.vias.size() == 1);
+  CHECK(again.vias[0].pos == r.vias[0].pos);
+}
+
+TEST_CASE("stitch: pair transitions off keeps the per-via placement", "[passes][stitch]") {
+  // The board of the pair-axis test with the option off: the stitch is anchored on the via of
+  // the first half alone, east of it at the minimum radius — the pre-Phase-4C behaviour, pinned.
+  const std::string sig = seg(5, 5, 15, 5, 3) + seg(15, 5, 15, 10, 3, 0.2, "B.Cu") +
+                          "  (via (at 15 5) (size 0.6) (drill 0.3) (layers \"F.Cu\" \"B.Cu\") (net 3))\n" +
+                          seg(5, 5.85, 15, 5.85, 2) + seg(15, 5.85, 15, 10.85, 2, 0.2, "B.Cu") +
+                          "  (via (at 15 5.85) (size 0.6) (drill 0.3) (layers \"F.Cu\" \"B.Cu\") (net 2))\n";
+  const auto l = load("pairoff", board_text(kGndPin + gnd_zone("F.Cu") + gnd_zone("B.Cu") + sig));
+  passes::StitchOptions o;
+  o.returns = {{3, 1, 2 * mm, "option"}, {2, 1, 2 * mm, "option"}};
+  o.pairs = {{3, 2}};
+  const auto r = passes::stitch_vias(l.board, l.rules, o);
+  REQUIRE(r.vias.size() == 1);
+  CHECK(r.pair_stitches == 0);
+  CHECK(r.vias[0].pos == pt(15.81, 5));
+  CHECK(r.returns[0].stitched_after == 1);
+  CHECK(r.returns[1].stitched_after == 1);  // served by the shared via, as before
+}
+
+TEST_CASE("stitch: a pair transition with no joint site falls back per via", "[passes][stitch]") {
+  // Distance 1 mm: no single site is within 1 mm of both vias and clear of both, so the joint
+  // search places nothing. The per-via search then serves the first half on its own; the ring
+  // of the second half finds no site at that distance, so it stays unstitched — as today.
+  const std::string sig = seg(5, 5, 15, 5, 3) + seg(15, 5, 15, 10, 3, 0.2, "B.Cu") +
+                          "  (via (at 15 5) (size 0.6) (drill 0.3) (layers \"F.Cu\" \"B.Cu\") (net 3))\n" +
+                          seg(5, 5.85, 15, 5.85, 2) + seg(15, 5.85, 15, 10.85, 2, 0.2, "B.Cu") +
+                          "  (via (at 15 5.85) (size 0.6) (drill 0.3) (layers \"F.Cu\" \"B.Cu\") (net 2))\n";
+  const auto l = load("pairtight", board_text(kGndPin + gnd_zone("F.Cu") + gnd_zone("B.Cu") + sig));
+  passes::StitchOptions o;
+  o.returns = {{3, 1, 1 * mm, "option"}, {2, 1, 1 * mm, "option"}};
+  o.pairs = {{3, 2}};
+  o.pair_transitions = true;
+  const auto r = passes::stitch_vias(l.board, l.rules, o);
+  CHECK(r.pair_stitches == 0);
+  REQUIRE(r.vias.size() == 1);
+  CHECK(r.vias[0].pos == pt(15.81, 5));
+  CHECK(r.returns[0].stitched_after == 1);
+  CHECK(r.returns[1].stitched_after == 0);
+}
+
 TEST_CASE("neck at pads: a wide track is necked to the pads it ends in, inside its own copper", "[passes][widen]") {
   // P's pads are 2 x 2 mm at (5, 10) and (25, 10); a 3 mm track between them is necked to 2 mm for 1.2 mm (half the pad plus 0.2) at each end.
   const auto l = load("neck", board_text(""));

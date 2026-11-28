@@ -25,6 +25,13 @@ struct StitchOptions {
     std::string source;         // "option" or the component rule (e.g. "USB2-09 J1")
   };
   std::vector<ReturnNet> returns;
+  // Pair transitions (Phase 4C, issue #69): when set, the two halves of a pair in `pairs` that both ask for
+  // return stitching to the same plane share one stitch via per layer transition, placed symmetrically
+  // between the two signal vias of the transition (TI SPRAAR7J section 2: stitching vias sit symmetrically
+  // within 200 mil, centre to centre, of the signal transition vias). Off: every via is served on its own,
+  // exactly as before.
+  bool pair_transitions = false;
+  std::vector<std::pair<model::NetId, model::NetId>> pairs;
   // Work budget (rule 5): sites examined plus exact checks. When it runs out no further site is tried.
   long work_limit = 2'000'000;
 };
@@ -42,6 +49,7 @@ struct StitchResult {
   std::vector<model::Via> vias;            // the vias to add, plane stitches first; all marked free
   std::vector<std::uint8_t> return_path;   // per via: 1 = placed for a signal via, 0 = grid
   std::vector<StitchReturn> returns;       // one row per StitchOptions::returns entry
+  int pair_stitches = 0;        // return-path vias placed for a pair transition (one per transition)
   int sites = 0;                // grid sites inside overlapping fills
   int site_served = 0;          // of them: already tied by a via or plated pad of the net within half the pitch
   int site_blocked = 0;         // of them: refused by the exact check
