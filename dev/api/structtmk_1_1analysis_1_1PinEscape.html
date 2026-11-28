@@ -95,6 +95,11 @@ $(function(){initNavTree('structtmk_1_1analysis_1_1PinEscape.html','','structtmk
 
 <p><code>#include &lt;<a class="el" href="escape__proof_8hpp_source.html">analysis/escape_proof.hpp</a>&gt;</code></p>
 <table class="memberdecls">
+<tr class="heading"><td colspan="2"><h2 id="header-nested-classes" class="groupheader"><a id="nested-classes" name="nested-classes"></a>
+Classes</h2></td></tr>
+<tr class="memitem:WallItem" id="r_WallItem"><td class="memItemLeft" align="right" valign="top">struct &#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="structtmk_1_1analysis_1_1PinEscape_1_1WallItem.html">WallItem</a></td></tr>
+<tr class="memdesc:"><td class="mdescLeft">&#160;</td><td class="mdescRight">The walling items that are routed copper (tracks, arcs, vias), identified by board index: what a rip-up may remove to free the pin.  <a href="structtmk_1_1analysis_1_1PinEscape_1_1WallItem.html#details">More...</a><br /></td></tr>
+</table><table class="memberdecls">
 <tr class="heading"><td colspan="2"><h2 id="header-pub-attribs" class="groupheader"><a id="pub-attribs" name="pub-attribs"></a>
 Public Attributes</h2></td></tr>
 <tr class="memitem:ae97115b1ff165958b75782ac6fd83237" id="r_ae97115b1ff165958b75782ac6fd83237"><td class="memItemLeft" align="right" valign="top">int&#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="#ae97115b1ff165958b75782ac6fd83237">pad</a> = -1</td></tr>
@@ -119,12 +124,13 @@ Public Attributes</h2></td></tr>
 <tr class="memdesc:aaf729d1d7d08f0cc726052ff03eb1d58"><td class="mdescLeft">&#160;</td><td class="mdescRight">enclosed only while those block (route &ndash;soft-zones, &ndash;soft-copper-graphics would free it); not <span class="tt"><a class="el" href="#aba5eeaf779091076c057392918e9f3e4" title="proved: no track of the board&#39;s minimum width gets out on any layer, no minimum via fits">enclosed</a></span>  <br /></td></tr>
 <tr class="memitem:ae4438dc2c68646203d0c7dfe15244262" id="r_ae4438dc2c68646203d0c7dfe15244262"><td class="memItemLeft" align="right" valign="top">std::vector&lt; std::string &gt;&#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="#ae4438dc2c68646203d0c7dfe15244262">walls</a></td></tr>
 <tr class="memdesc:ae4438dc2c68646203d0c7dfe15244262"><td class="mdescLeft">&#160;</td><td class="mdescRight">what bounds the space: pads ("U3.6"), "the GND zone fill", "the board edge" (nearest first, at most 6)  <br /></td></tr>
+<tr class="memitem:a3c2fb6e1f0788f3c5b945192a6f3dbaa" id="r_a3c2fb6e1f0788f3c5b945192a6f3dbaa"><td class="memItemLeft" align="right" valign="top">std::vector&lt; <a class="el" href="structtmk_1_1analysis_1_1PinEscape_1_1WallItem.html">WallItem</a> &gt;&#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="#a3c2fb6e1f0788f3c5b945192a6f3dbaa">wall_items</a></td></tr>
 <tr class="memitem:a32f90fb39420b634b85dcc59d5453124" id="r_a32f90fb39420b634b85dcc59d5453124"><td class="memItemLeft" align="right" valign="top">std::string&#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="#a32f90fb39420b634b85dcc59d5453124">text</a></td></tr>
 <tr class="memdesc:a32f90fb39420b634b85dcc59d5453124"><td class="mdescLeft">&#160;</td><td class="mdescRight">one sentence for the user  <br /></td></tr>
 </table>
 <a name="details" id="details"></a><h2 id="header-details" class="groupheader">Detailed Description</h2>
 <div class="textblock">
-<p class="definition">Definition at line <a class="el" href="escape__proof_8hpp_source.html#l00033">33</a> of file <a class="el" href="escape__proof_8hpp_source.html">escape_proof.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="escape__proof_8hpp_source.html#l00040">40</a> of file <a class="el" href="escape__proof_8hpp_source.html">escape_proof.hpp</a>.</p>
 </div><a name="doc-variable-members" id="doc-variable-members"></a><h2 id="header-doc-variable-members" class="groupheader">Member Data Documentation</h2>
 <a id="a8ebad6ed1868341cd5535706aa41e723" name="a8ebad6ed1868341cd5535706aa41e723"></a>
 <h2 class="memtitle"><span class="permalink"><a href="#a8ebad6ed1868341cd5535706aa41e723">&#9670;&#160;</a></span>analysed</h2>
@@ -140,7 +146,7 @@ Public Attributes</h2></td></tr>
 
 <p>false: the pad has no copper or no net, nothing was decided </p>
 
-<p class="definition">Definition at line <a class="el" href="escape__proof_8hpp_source.html#l00035">35</a> of file <a class="el" href="escape__proof_8hpp_source.html">escape_proof.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="escape__proof_8hpp_source.html#l00042">42</a> of file <a class="el" href="escape__proof_8hpp_source.html">escape_proof.hpp</a>.</p>
 
 </div>
 </div>
@@ -158,7 +164,7 @@ Public Attributes</h2></td></tr>
 
 <p>the net's track width and clearance used </p>
 
-<p class="definition">Definition at line <a class="el" href="escape__proof_8hpp_source.html#l00038">38</a> of file <a class="el" href="escape__proof_8hpp_source.html">escape_proof.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="escape__proof_8hpp_source.html#l00045">45</a> of file <a class="el" href="escape__proof_8hpp_source.html">escape_proof.hpp</a>.</p>
 
 </div>
 </div>
@@ -176,7 +182,7 @@ Public Attributes</h2></td></tr>
 
 <p>proved: no track of the board's minimum width gets out on any layer, no minimum via fits </p>
 
-<p class="definition">Definition at line <a class="el" href="escape__proof_8hpp_source.html#l00036">36</a> of file <a class="el" href="escape__proof_8hpp_source.html">escape_proof.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="escape__proof_8hpp_source.html#l00043">43</a> of file <a class="el" href="escape__proof_8hpp_source.html">escape_proof.hpp</a>.</p>
 
 </div>
 </div>
@@ -194,7 +200,7 @@ Public Attributes</h2></td></tr>
 
 <p>copper layers on which the pin is enclosed (all of its layers when <span class="tt"><a class="el" href="#aba5eeaf779091076c057392918e9f3e4" title="proved: no track of the board&#39;s minimum width gets out on any layer, no minimum via fits">enclosed</a></span>) </p>
 
-<p class="definition">Definition at line <a class="el" href="escape__proof_8hpp_source.html#l00037">37</a> of file <a class="el" href="escape__proof_8hpp_source.html">escape_proof.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="escape__proof_8hpp_source.html#l00044">44</a> of file <a class="el" href="escape__proof_8hpp_source.html">escape_proof.hpp</a>.</p>
 
 </div>
 </div>
@@ -213,7 +219,7 @@ Public Attributes</h2></td></tr>
 <p>Walled in for the class's track and via but not for the board's minimum ones (a class's sizes are defaults, not limits): not <span class="tt"><a class="el" href="#aba5eeaf779091076c057392918e9f3e4" title="proved: no track of the board&#39;s minimum width gets out on any layer, no minimum via fits">enclosed</a></span>. </p>
 <p>neck_width &gt; 0: the widest track that gets out; small_via_fits: no track gets out, a smaller via fits. </p>
 
-<p class="definition">Definition at line <a class="el" href="escape__proof_8hpp_source.html#l00041">41</a> of file <a class="el" href="escape__proof_8hpp_source.html">escape_proof.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="escape__proof_8hpp_source.html#l00048">48</a> of file <a class="el" href="escape__proof_8hpp_source.html">escape_proof.hpp</a>.</p>
 
 </div>
 </div>
@@ -231,7 +237,7 @@ Public Attributes</h2></td></tr>
 
 <p>board pad index </p>
 
-<p class="definition">Definition at line <a class="el" href="escape__proof_8hpp_source.html#l00034">34</a> of file <a class="el" href="escape__proof_8hpp_source.html">escape_proof.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="escape__proof_8hpp_source.html#l00041">41</a> of file <a class="el" href="escape__proof_8hpp_source.html">escape_proof.hpp</a>.</p>
 
 </div>
 </div>
@@ -247,7 +253,7 @@ Public Attributes</h2></td></tr>
       </table>
 </div><div class="memdoc">
 
-<p class="definition">Definition at line <a class="el" href="escape__proof_8hpp_source.html#l00042">42</a> of file <a class="el" href="escape__proof_8hpp_source.html">escape_proof.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="escape__proof_8hpp_source.html#l00049">49</a> of file <a class="el" href="escape__proof_8hpp_source.html">escape_proof.hpp</a>.</p>
 
 </div>
 </div>
@@ -265,7 +271,7 @@ Public Attributes</h2></td></tr>
 
 <p>enclosed only while those block (route &ndash;soft-zones, &ndash;soft-copper-graphics would free it); not <span class="tt"><a class="el" href="#aba5eeaf779091076c057392918e9f3e4" title="proved: no track of the board&#39;s minimum width gets out on any layer, no minimum via fits">enclosed</a></span> </p>
 
-<p class="definition">Definition at line <a class="el" href="escape__proof_8hpp_source.html#l00045">45</a> of file <a class="el" href="escape__proof_8hpp_source.html">escape_proof.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="escape__proof_8hpp_source.html#l00052">52</a> of file <a class="el" href="escape__proof_8hpp_source.html">escape_proof.hpp</a>.</p>
 
 </div>
 </div>
@@ -283,7 +289,7 @@ Public Attributes</h2></td></tr>
 
 <p>zone fills, or net-less copper graphics on the pin, are among the walls </p>
 
-<p class="definition">Definition at line <a class="el" href="escape__proof_8hpp_source.html#l00044">44</a> of file <a class="el" href="escape__proof_8hpp_source.html">escape_proof.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="escape__proof_8hpp_source.html#l00051">51</a> of file <a class="el" href="escape__proof_8hpp_source.html">escape_proof.hpp</a>.</p>
 
 </div>
 </div>
@@ -301,7 +307,7 @@ Public Attributes</h2></td></tr>
 
 <p>one sentence for the user </p>
 
-<p class="definition">Definition at line <a class="el" href="escape__proof_8hpp_source.html#l00047">47</a> of file <a class="el" href="escape__proof_8hpp_source.html">escape_proof.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="escape__proof_8hpp_source.html#l00063">63</a> of file <a class="el" href="escape__proof_8hpp_source.html">escape_proof.hpp</a>.</p>
 
 </div>
 </div>
@@ -319,7 +325,23 @@ Public Attributes</h2></td></tr>
 
 <p>a via would fit in the pin's own pad (route &ndash;via-in-pad) </p>
 
-<p class="definition">Definition at line <a class="el" href="escape__proof_8hpp_source.html#l00043">43</a> of file <a class="el" href="escape__proof_8hpp_source.html">escape_proof.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="escape__proof_8hpp_source.html#l00050">50</a> of file <a class="el" href="escape__proof_8hpp_source.html">escape_proof.hpp</a>.</p>
+
+</div>
+</div>
+<a id="a3c2fb6e1f0788f3c5b945192a6f3dbaa" name="a3c2fb6e1f0788f3c5b945192a6f3dbaa"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#a3c2fb6e1f0788f3c5b945192a6f3dbaa">&#9670;&#160;</a></span>wall_items</h2>
+
+<div class="memitem">
+<div class="memproto">
+      <table class="memname">
+        <tr>
+          <td class="memname">std::vector&lt;<a class="el" href="structtmk_1_1analysis_1_1PinEscape_1_1WallItem.html">WallItem</a>&gt; tmk::analysis::PinEscape::wall_items</td>
+        </tr>
+      </table>
+</div><div class="memdoc">
+
+<p class="definition">Definition at line <a class="el" href="escape__proof_8hpp_source.html#l00062">62</a> of file <a class="el" href="escape__proof_8hpp_source.html">escape_proof.hpp</a>.</p>
 
 </div>
 </div>
@@ -337,7 +359,7 @@ Public Attributes</h2></td></tr>
 
 <p>what bounds the space: pads ("U3.6"), "the GND zone fill", "the board edge" (nearest first, at most 6) </p>
 
-<p class="definition">Definition at line <a class="el" href="escape__proof_8hpp_source.html#l00046">46</a> of file <a class="el" href="escape__proof_8hpp_source.html">escape_proof.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="escape__proof_8hpp_source.html#l00053">53</a> of file <a class="el" href="escape__proof_8hpp_source.html">escape_proof.hpp</a>.</p>
 
 </div>
 </div>
@@ -353,7 +375,7 @@ Public Attributes</h2></td></tr>
       </table>
 </div><div class="memdoc">
 
-<p class="definition">Definition at line <a class="el" href="escape__proof_8hpp_source.html#l00038">38</a> of file <a class="el" href="escape__proof_8hpp_source.html">escape_proof.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="escape__proof_8hpp_source.html#l00045">45</a> of file <a class="el" href="escape__proof_8hpp_source.html">escape_proof.hpp</a>.</p>
 
 </div>
 </div>

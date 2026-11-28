@@ -50,5 +50,6 @@ var namespacetmk =
     [ "splitmix64", "namespacetmk.html#a29d1992943fb15d4937b32ea0f749255", null ],
     [ "version", "namespacetmk.html#aa03a0d691db43504fd8b479a756bea11", null ],
     [ "kNmPerMil", "namespacetmk.html#a200f23e97201f127c16d8d1877736399", null ],
-    [ "kNmPerMm", "namespacetmk.html#ad7fdf2341656da85a91722b1b0a7508c", null ]
+    [ "kNmPerMm", "namespacetmk.html#ad7fdf2341656da85a91722b1b0a7508c", null ],
+    [ "kWorkAccountingVersion", "namespacetmk.html#a8a590bdaf19a5fb7bedb897f1da1d17e", null ]
 ];

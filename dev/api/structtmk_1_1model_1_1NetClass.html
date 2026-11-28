@@ -119,6 +119,10 @@ Public Attributes</h2></td></tr>
 <tr class="memdesc:a6341b190d0a74fa29e7efed38f5b4617"><td class="mdescLeft">&#160;</td><td class="mdescRight">Which of the ten parameters KiCad 10.0.6 fills from Default when unset (NET_SETTINGS::addMissingDefaults) the project sets for this class, one bit each in kNetClassFields order.  <br /></td></tr>
 <tr class="memitem:a45749d56722f1e72ffe7c2b37ab613b5" id="r_a45749d56722f1e72ffe7c2b37ab613b5"><td class="memItemLeft" align="right" valign="top"><a class="el" href="namespacetmk.html#acdd8166e81c544e7a3c2faf32e8147d6">Coord</a>&#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="#a45749d56722f1e72ffe7c2b37ab613b5">tuning_pair_gap</a> = 0</td></tr>
 <tr class="memdesc:a45749d56722f1e72ffe7c2b37ab613b5"><td class="mdescLeft">&#160;</td><td class="mdescRight">Set by the route job for a differential tuning profile (doc 05 §58): the pair gap its pairs are routed at.  <br /></td></tr>
+<tr class="memitem:a2722cab6a01ae9495d8cf2f154d6b44d" id="r_a2722cab6a01ae9495d8cf2f154d6b44d"><td class="memItemLeft" align="right" valign="top">std::map&lt; std::string, <a class="el" href="namespacetmk.html#acdd8166e81c544e7a3c2faf32e8147d6">Coord</a> &gt;&#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="#a2722cab6a01ae9495d8cf2f154d6b44d">track_width_on</a></td></tr>
+<tr class="memdesc:a2722cab6a01ae9495d8cf2f154d6b44d"><td class="mdescLeft">&#160;</td><td class="mdescRight">Phase 3C-1 (issue 37): per-layer geometry, by copper layer name; empty = the scalars above govern every layer.  <br /></td></tr>
+<tr class="memitem:abeb88528a6c40ce7fa0d4e512c618266" id="r_abeb88528a6c40ce7fa0d4e512c618266"><td class="memItemLeft" align="right" valign="top">std::map&lt; std::string, <a class="el" href="namespacetmk.html#acdd8166e81c544e7a3c2faf32e8147d6">Coord</a> &gt;&#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="#abeb88528a6c40ce7fa0d4e512c618266">diff_pair_width_on</a></td></tr>
+<tr class="memitem:adc65df93ac121e8721925225fed9449e" id="r_adc65df93ac121e8721925225fed9449e"><td class="memItemLeft" align="right" valign="top">std::map&lt; std::string, <a class="el" href="namespacetmk.html#acdd8166e81c544e7a3c2faf32e8147d6">Coord</a> &gt;&#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="#adc65df93ac121e8721925225fed9449e">diff_pair_gap_on</a></td></tr>
 </table><table class="memberdecls">
 <tr class="heading"><td colspan="2"><h2 id="header-pub-static-attribs" class="groupheader"><a id="pub-static-attribs" name="pub-static-attribs"></a>
 Static Public Attributes</h2></td></tr>
@@ -160,6 +164,22 @@ Static Public Attributes</h2></td></tr>
 
 </div>
 </div>
+<a id="adc65df93ac121e8721925225fed9449e" name="adc65df93ac121e8721925225fed9449e"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#adc65df93ac121e8721925225fed9449e">&#9670;&#160;</a></span>diff_pair_gap_on</h2>
+
+<div class="memitem">
+<div class="memproto">
+      <table class="memname">
+        <tr>
+          <td class="memname">std::map&lt;std::string, <a class="el" href="namespacetmk.html#acdd8166e81c544e7a3c2faf32e8147d6">Coord</a>&gt; tmk::model::NetClass::diff_pair_gap_on</td>
+        </tr>
+      </table>
+</div><div class="memdoc">
+
+<p class="definition">Definition at line <a class="el" href="rules_8hpp_source.html#l00045">45</a> of file <a class="el" href="rules_8hpp_source.html">rules.hpp</a>.</p>
+
+</div>
+</div>
 <a id="a149e5f691c756eb71da7524c76aec2d8" name="a149e5f691c756eb71da7524c76aec2d8"></a>
 <h2 class="memtitle"><span class="permalink"><a href="#a149e5f691c756eb71da7524c76aec2d8">&#9670;&#160;</a></span>diff_pair_via_gap</h2>
 
@@ -189,6 +209,22 @@ Static Public Attributes</h2></td></tr>
 </div><div class="memdoc">
 
 <p class="definition">Definition at line <a class="el" href="rules_8hpp_source.html#l00023">23</a> of file <a class="el" href="rules_8hpp_source.html">rules.hpp</a>.</p>
+
+</div>
+</div>
+<a id="abeb88528a6c40ce7fa0d4e512c618266" name="abeb88528a6c40ce7fa0d4e512c618266"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#abeb88528a6c40ce7fa0d4e512c618266">&#9670;&#160;</a></span>diff_pair_width_on</h2>
+
+<div class="memitem">
+<div class="memproto">
+      <table class="memname">
+        <tr>
+          <td class="memname">std::map&lt;std::string, <a class="el" href="namespacetmk.html#acdd8166e81c544e7a3c2faf32e8147d6">Coord</a>&gt; tmk::model::NetClass::diff_pair_width_on</td>
+        </tr>
+      </table>
+</div><div class="memdoc">
+
+<p class="definition">Definition at line <a class="el" href="rules_8hpp_source.html#l00044">44</a> of file <a class="el" href="rules_8hpp_source.html">rules.hpp</a>.</p>
 
 </div>
 </div>
@@ -318,6 +354,25 @@ Static Public Attributes</h2></td></tr>
 </div><div class="memdoc">
 
 <p class="definition">Definition at line <a class="el" href="rules_8hpp_source.html#l00018">18</a> of file <a class="el" href="rules_8hpp_source.html">rules.hpp</a>.</p>
+
+</div>
+</div>
+<a id="a2722cab6a01ae9495d8cf2f154d6b44d" name="a2722cab6a01ae9495d8cf2f154d6b44d"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#a2722cab6a01ae9495d8cf2f154d6b44d">&#9670;&#160;</a></span>track_width_on</h2>
+
+<div class="memitem">
+<div class="memproto">
+      <table class="memname">
+        <tr>
+          <td class="memname">std::map&lt;std::string, <a class="el" href="namespacetmk.html#acdd8166e81c544e7a3c2faf32e8147d6">Coord</a>&gt; tmk::model::NetClass::track_width_on</td>
+        </tr>
+      </table>
+</div><div class="memdoc">
+
+<p>Phase 3C-1 (issue 37): per-layer geometry, by copper layer name; empty = the scalars above govern every layer. </p>
+<p>Producers: the crules synthetic classes (the impedance solver's per-layer LineSolutions, the current solver's outer/inner widths). Not a KiCad class field - KiCad expresses per-layer widths in tuning profiles - so, like tuning_pair_gap, these live only in the working copy and are never written back to the project. </p>
+
+<p class="definition">Definition at line <a class="el" href="rules_8hpp_source.html#l00043">43</a> of file <a class="el" href="rules_8hpp_source.html">rules.hpp</a>.</p>
 
 </div>
 </div>

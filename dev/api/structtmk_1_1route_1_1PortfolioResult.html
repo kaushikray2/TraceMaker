@@ -130,7 +130,7 @@ Public Attributes</h2></td></tr>
 <div class="textblock"><p>Runs several differently configured routers (portfolio variants) and keeps the best result. </p>
 <p>Variant i is a pure function of (base options, i): it never depends on the thread count, and with a work budget each variant's result is deterministic. The variants are scheduled on <span class="tt">threads</span> worker threads (0 = one per variant) in index order and the winner is the minimum of a total order (most connections routed, then fewest vias, then shortest copper, then the lowest variant index), so with <span class="tt">base.work_budget</span> &gt; 0 the output is the same for any <span class="tt">threads</span> (requirement N3, decision D47). Only the first variant streams events live. </p>
 
-<p class="definition">Definition at line <a class="el" href="router_8hpp_source.html#l00476">476</a> of file <a class="el" href="router_8hpp_source.html">router.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="router_8hpp_source.html#l00492">492</a> of file <a class="el" href="router_8hpp_source.html">router.hpp</a>.</p>
 </div><a name="doc-variable-members" id="doc-variable-members"></a><h2 id="header-doc-variable-members" class="groupheader">Member Data Documentation</h2>
 <a id="ae309ef614da0e72579d9a10e04e85a64" name="ae309ef614da0e72579d9a10e04e85a64"></a>
 <h2 class="memtitle"><span class="permalink"><a href="#ae309ef614da0e72579d9a10e04e85a64">&#9670;&#160;</a></span>best</h2>
@@ -144,7 +144,7 @@ Public Attributes</h2></td></tr>
       </table>
 </div><div class="memdoc">
 
-<p class="definition">Definition at line <a class="el" href="router_8hpp_source.html#l00477">477</a> of file <a class="el" href="router_8hpp_source.html">router.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="router_8hpp_source.html#l00493">493</a> of file <a class="el" href="router_8hpp_source.html">router.hpp</a>.</p>
 
 </div>
 </div>
@@ -162,7 +162,7 @@ Public Attributes</h2></td></tr>
 
 <p>position in <span class="tt"><a class="el" href="#aeb8ea9f00166f7491f31c4c1f4dcceb3" title="description per variant">variants</a></span> </p>
 
-<p class="definition">Definition at line <a class="el" href="router_8hpp_source.html#l00478">478</a> of file <a class="el" href="router_8hpp_source.html">router.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="router_8hpp_source.html#l00494">494</a> of file <a class="el" href="router_8hpp_source.html">router.hpp</a>.</p>
 
 </div>
 </div>
@@ -180,7 +180,7 @@ Public Attributes</h2></td></tr>
 
 <p>variants the deadline cut short in the deciding round </p>
 
-<p class="definition">Definition at line <a class="el" href="router_8hpp_source.html#l00486">486</a> of file <a class="el" href="router_8hpp_source.html">router.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="router_8hpp_source.html#l00502">502</a> of file <a class="el" href="router_8hpp_source.html">router.hpp</a>.</p>
 
 </div>
 </div>
@@ -198,7 +198,7 @@ Public Attributes</h2></td></tr>
 
 <p>portfolio variant index per position </p>
 
-<p class="definition">Definition at line <a class="el" href="router_8hpp_source.html#l00479">479</a> of file <a class="el" href="router_8hpp_source.html">router.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="router_8hpp_source.html#l00495">495</a> of file <a class="el" href="router_8hpp_source.html">router.hpp</a>.</p>
 
 </div>
 </div>
@@ -216,7 +216,7 @@ Public Attributes</h2></td></tr>
 
 <p>Clearance ramp (relax): per relaxed stage that ran, how much the clearance was lowered and the most connections a round of it routed (under the lowered clearance, so not legal yet). </p>
 
-<p class="definition">Definition at line <a class="el" href="router_8hpp_source.html#l00495">495</a> of file <a class="el" href="router_8hpp_source.html">router.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="router_8hpp_source.html#l00511">511</a> of file <a class="el" href="router_8hpp_source.html">router.hpp</a>.</p>
 
 </div>
 </div>
@@ -234,7 +234,7 @@ Public Attributes</h2></td></tr>
 
 <p>routed count per variant </p>
 
-<p class="definition">Definition at line <a class="el" href="router_8hpp_source.html#l00481">481</a> of file <a class="el" href="router_8hpp_source.html">router.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="router_8hpp_source.html#l00497">497</a> of file <a class="el" href="router_8hpp_source.html">router.hpp</a>.</p>
 
 </div>
 </div>
@@ -252,7 +252,7 @@ Public Attributes</h2></td></tr>
 
 <p>wall-budget seconds the cancelled variants did not spend (wall-clock runs) </p>
 
-<p class="definition">Definition at line <a class="el" href="router_8hpp_source.html#l00487">487</a> of file <a class="el" href="router_8hpp_source.html">router.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="router_8hpp_source.html#l00503">503</a> of file <a class="el" href="router_8hpp_source.html">router.hpp</a>.</p>
 
 </div>
 </div>
@@ -270,7 +270,7 @@ Public Attributes</h2></td></tr>
 
 <p>work units the cancelled variants did not spend (work-budget runs) </p>
 
-<p class="definition">Definition at line <a class="el" href="router_8hpp_source.html#l00488">488</a> of file <a class="el" href="router_8hpp_source.html">router.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="router_8hpp_source.html#l00504">504</a> of file <a class="el" href="router_8hpp_source.html">router.hpp</a>.</p>
 
 </div>
 </div>
@@ -288,7 +288,7 @@ Public Attributes</h2></td></tr>
 
 <p>wall time per variant (its own clock) </p>
 
-<p class="definition">Definition at line <a class="el" href="router_8hpp_source.html#l00482">482</a> of file <a class="el" href="router_8hpp_source.html">router.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="router_8hpp_source.html#l00498">498</a> of file <a class="el" href="router_8hpp_source.html">router.hpp</a>.</p>
 
 </div>
 </div>
@@ -307,7 +307,7 @@ Public Attributes</h2></td></tr>
 <p>Rounds budget report (issue #21): when the rounds path ended without completing the board, what stopped it &ndash; "rounds" (the &ndash;rounds cap), "work" (the round work budget) or "time" (the wall clock). </p>
 <p>Empty when the board completed or no rounds ran. </p>
 
-<p class="definition">Definition at line <a class="el" href="router_8hpp_source.html#l00492">492</a> of file <a class="el" href="router_8hpp_source.html">router.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="router_8hpp_source.html#l00508">508</a> of file <a class="el" href="router_8hpp_source.html">router.hpp</a>.</p>
 
 </div>
 </div>
@@ -325,7 +325,7 @@ Public Attributes</h2></td></tr>
 
 <p>Sibling early-stop (issue #20): a variant completed and the shared deadline cancelled the rest. </p>
 
-<p class="definition">Definition at line <a class="el" href="router_8hpp_source.html#l00485">485</a> of file <a class="el" href="router_8hpp_source.html">router.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="router_8hpp_source.html#l00501">501</a> of file <a class="el" href="router_8hpp_source.html">router.hpp</a>.</p>
 
 </div>
 </div>
@@ -343,7 +343,7 @@ Public Attributes</h2></td></tr>
 
 <p>description per variant </p>
 
-<p class="definition">Definition at line <a class="el" href="router_8hpp_source.html#l00480">480</a> of file <a class="el" href="router_8hpp_source.html">router.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="router_8hpp_source.html#l00496">496</a> of file <a class="el" href="router_8hpp_source.html">router.hpp</a>.</p>
 
 </div>
 </div>
@@ -361,7 +361,7 @@ Public Attributes</h2></td></tr>
 
 <p>work profile per variant, over every round </p>
 
-<p class="definition">Definition at line <a class="el" href="router_8hpp_source.html#l00483">483</a> of file <a class="el" href="router_8hpp_source.html">router.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="router_8hpp_source.html#l00499">499</a> of file <a class="el" href="router_8hpp_source.html">router.hpp</a>.</p>
 
 </div>
 </div>

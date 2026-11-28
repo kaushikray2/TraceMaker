@@ -3030,7 +3030,7 @@ Options:
   --config TEXT:FILE          Read options from a file of `name = value` lines, as `tracemaker tui` saves them; options on the command line win
   -o,--output TEXT REQUIRED   Output .kicad_pcb
   --time FLOAT                Time limit, seconds (safety net; results then depend on machine speed)
-  --work INT                  Deterministic work budget in search expansions per router (e.g. 50000000); with the default portfolio every variant gets the whole budget, so a run does up to --variants times this work
+  --work INT                  Deterministic work budget in search expansions per router (e.g. 50000000); with the default portfolio every variant gets the whole budget, so a run does up to --variants times this work. Work accounting version 2: an expansion covers more than under version 1 (the upstream 0.12.1 accounting) - pair leg checks and the via-shove / pin-rescue work are folded into the count - so a budget calibrated under version 1 needs roughly twice the value for the same reach (measured on the Nomad reference fixture: the baseline that 20000000 met under version 1 needs 40000000 under version 2). --deterministic also suppresses the knowledge base, which changes the effective reach at the same budget. The accounting version is emitted as work_accounting_version in the route JSON.
   --pitch-um FLOAT            Lattice pitch in micrometres (default: automatic)
   --via-cost-mm FLOAT         Cost of a via as equivalent track length
   --seed UINT
@@ -3052,6 +3052,7 @@ Options:
   --pair-leg-mm FLOAT:FLOAT in [0.6 - 50]
                               Coupled pairs: longest reach of the uncoupled legs from the pads to the coupled section (default 2.5)
   --protect-coupled           Coupled pairs: negotiation never rips a half of a coupled pair (the route that would fails instead)
+  --pair-negotiate            Coupled pairs: when no coupled path exists, try once more letting the pair displace routed connections, kept only if every displaced connection routes again
   --recouple-work INT:NONNEGATIVE
                               Coupled pairs: work units the clean-up re-coupling of split pairs may spend past the budget (default 2000000, 0 = none)
   --pair-retry-leg-mm FLOAT:FLOAT in [0 - 50]
@@ -3063,6 +3064,7 @@ Options:
                               Plan connections by copper-to-copper distance between pads rather than centre to centre (default on)
   --escape-plan,--no-escape-plan{false}
                               Reserve escape corridors for the pins of dense packages (QFP, BGA) before routing
+  --escape-release-open       With --escape-plan: at the first negotiation pass, give back the corridors of pads no routed connection used (issue 39)
   --soft-pad-masks            Pad solder-mask openings do not keep other nets' tracks and vias out; KiCad reports solder_mask_bridge where one lies in an opening (judgement; --fit-rules-from turns it on when the reference does it; doc 20 §2.13)
   --soft-copper-graphics      Board copper graphics (polygons on a copper layer, e.g. an EasyEDA import's pours) take the net of the one net whose pads, tracks or vias they touch: that net may touch them, no other (default: net-less copper nothing may touch)
   --escape-flow               Escape plan v2: min-cost-flow channel and layer assignment for deep BGA arrays (implies --escape-plan; experimental)
@@ -3142,6 +3144,7 @@ Options:
   --finish-fresh              With --finish: a rung after the fitted rules that routes the board as given with the fitted rules from the start, kept when it leaves fewer open
   --finish-masks              With --finish: a rung after the fitted rules where pad solder-mask openings no longer keep tracks out (--soft-pad-masks)
   --finish-guard-walls        With --finish: keep a routing rung only when open + walled-in pins improves (DR-22: a rung's own copper can wall the pins it leaves open in, and no later rung can reach a walled pin; priced from a wall proof over each rung's output board, computed even with --no-why-open). Chains rungs are not priced; a kept one re-prices the best board
+  --finish-rip-walls          With --finish: after the rungs, free pins the best board walls in with its own routed copper (DR-22 Tier 2-prime): proof the best board, rip the wall the proof names (a coupled pair whole over both branches, severed stubs peeled within 1 mm of a walled pin, a wider rip that wins nothing retried with the named items alone, dead antennas pruned off the heal; locked copper is never ripped), route the opened connections on top, and keep a round only when (open, walled) improves lexicographically (issue 57); at most 4 rounds
   --finish-layers INT ...     With --finish: later rungs that add this many copper layers to the board's count (e.g. 2,4); none by default
   --try-layers INT ...        Layer-count advisor: route with each count (e.g. 2,4,6), fewest first, stop at the first that completes and write that board; the summary's "layers" lists every count tried
   --view                      Stream the routing live to the browser viewer
@@ -3218,7 +3221,7 @@ Options:
   --pass-work INT:POSITIVE    Work budget of each after-route pass, in exact checks (default 2,000,000)
 
 
-Exit codes: 0 = every connection routed; 3 = the job ran but connections remain open (see open_connections in the route JSON); 1 = the job failed to run (unreadable board, refused configuration); 2 = usage error.
+Exit codes: 0 = every connection routed; 3 = the job ran but connections remain open (see open_connections in the route JSON); 1 = the job failed to run (unreadable board, refused configuration); 2 = usage error. The 1/2 boundary is who refuses: syntax and conversion errors from the argument parser (an unknown flag, a non-numeric value for a numeric option) exit 2; the binary's own validation refusals exit 1 - --deterministic without a work budget, a malformed --reroute-window or --window value, an out-of-range value the parser accepts syntactically.
 </code></pre></div>
 <h3 id="tracemaker-route-batch"><code>tracemaker route-batch</code><a class="headerlink" href="#tracemaker-route-batch" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code>Route every board of a JSON manifest in one process, through one global thread pool (issue #22)
@@ -3453,6 +3456,12 @@ Options:
   --threads INT:INT in [1 - 256]
                               Open connections measured at once (the result does not depend on it; default 8)
   --seed UINT                 Router seed (default 1)
+  --clique,--no-clique{false} Phase 3B: on a too_deep / lifted_net_no_path_bare failure, one bounded clique attempt at the root over the nets the chain lifted or blamed (default on)
+  --clique-work INT           Work budget of the clique portfolio attempt (default 8 M)
+  --clique-variants INT:INT in [1 - 16]
+                              Portfolio variants of the clique attempt (default 6)
+  --clique-max-nets INT:INT in [3 - 64]
+                              Clique attempts over more nets than this are not attempted (default 12)
   --soft-zones                Zone fills do not block other nets (as route --soft-zones)
   --no-fill-planes{false}     Do not fill zones that have no fill
 </code></pre></div>

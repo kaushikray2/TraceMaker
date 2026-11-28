@@ -195,8 +195,8 @@ Functions</h2></td></tr>
 <tr class="memitem:aae11d853bcf1effbdbdd0e421a0b6a72" id="r_aae11d853bcf1effbdbdd0e421a0b6a72"><td class="memItemLeft" align="right" valign="top">std::vector&lt; std::uint8_t &gt;&#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="#aae11d853bcf1effbdbdd0e421a0b6a72">nets_joined</a> (const <a class="el" href="structtmk_1_1model_1_1Board.html">model::Board</a> &amp;b, const <a class="el" href="structtmk_1_1model_1_1DesignRules.html">model::DesignRules</a> &amp;rules)</td></tr>
 <tr class="memdesc:aae11d853bcf1effbdbdd0e421a0b6a72"><td class="mdescLeft">&#160;</td><td class="mdescRight">Per net: 1 when all its pads are joined by copper (the router's own connectivity; nets without pads count as joined).  <br /></td></tr>
 <tr class="memitem:a6738f735ef8f0fe72a5242f79c9a42c0" id="r_a6738f735ef8f0fe72a5242f79c9a42c0"><td class="memItemLeft" align="right" valign="top"><a class="el" href="structtmk_1_1route_1_1CutReport.html">CutReport</a>&#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="#a6738f735ef8f0fe72a5242f79c9a42c0">cut_test</a> (const <a class="el" href="structtmk_1_1model_1_1Board.html">model::Board</a> &amp;board, const <a class="el" href="structtmk_1_1model_1_1DesignRules.html">model::DesignRules</a> &amp;rules, const <a class="el" href="structtmk_1_1route_1_1CutTestOptions.html">CutTestOptions</a> &amp;opt={})</td></tr>
-<tr class="memitem:a1713d7202f73ee0f2d2d867e88e3d430" id="r_a1713d7202f73ee0f2d2d867e88e3d430"><td class="memItemLeft" align="right" valign="top"><a class="el" href="structtmk_1_1route_1_1PairRule.html">PairRule</a>&#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="#a1713d7202f73ee0f2d2d867e88e3d430">pair_rule</a> (const <a class="el" href="structtmk_1_1model_1_1Board.html">model::Board</a> &amp;b, const <a class="el" href="structtmk_1_1model_1_1DesignRules.html">model::DesignRules</a> &amp;rules, const <a class="el" href="classtmk_1_1drc_1_1RuleEngine.html">drc::RuleEngine</a> &amp;re, <a class="el" href="namespacetmk_1_1model.html#a61db1ff7bad5e8c323a7f6c48aa8407c">model::NetId</a> a, <a class="el" href="namespacetmk_1_1model.html#a61db1ff7bad5e8c323a7f6c48aa8407c">model::NetId</a> c, <a class="el" href="namespacetmk.html#acdd8166e81c544e7a3c2faf32e8147d6">Coord</a> via_mask=0)</td></tr>
-<tr class="memdesc:a1713d7202f73ee0f2d2d867e88e3d430"><td class="mdescLeft">&#160;</td><td class="mdescRight"><span class="tt">via_mask</span>: solder-mask expansion of untented vias (<a class="el" href="classtmk_1_1route_1_1Obstacles.html#abbc4f460a26b46e9735d15bd2c81adbd" title="Solder-mask expansion the checks give untented vias (0 when the board tents them).">route::Obstacles::via_mask()</a>); two vias then need their mask openings apart as well.  <br /></td></tr>
+<tr class="memitem:aadca4c7c3a34a4d3e541b049ba2c647d" id="r_aadca4c7c3a34a4d3e541b049ba2c647d"><td class="memItemLeft" align="right" valign="top"><a class="el" href="structtmk_1_1route_1_1PairRule.html">PairRule</a>&#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="#aadca4c7c3a34a4d3e541b049ba2c647d">pair_rule</a> (const <a class="el" href="structtmk_1_1model_1_1Board.html">model::Board</a> &amp;b, const <a class="el" href="structtmk_1_1model_1_1DesignRules.html">model::DesignRules</a> &amp;rules, const <a class="el" href="classtmk_1_1drc_1_1RuleEngine.html">drc::RuleEngine</a> &amp;re, <a class="el" href="namespacetmk_1_1model.html#a61db1ff7bad5e8c323a7f6c48aa8407c">model::NetId</a> a, <a class="el" href="namespacetmk_1_1model.html#a61db1ff7bad5e8c323a7f6c48aa8407c">model::NetId</a> c, <a class="el" href="namespacetmk.html#acdd8166e81c544e7a3c2faf32e8147d6">Coord</a> via_mask=0, const std::string &amp;layer=&quot;&quot;)</td></tr>
+<tr class="memdesc:aadca4c7c3a34a4d3e541b049ba2c647d"><td class="mdescLeft">&#160;</td><td class="mdescRight"><span class="tt">via_mask</span>: solder-mask expansion of untented vias (<a class="el" href="classtmk_1_1route_1_1Obstacles.html#abbc4f460a26b46e9735d15bd2c81adbd" title="Solder-mask expansion the checks give untented vias (0 when the board tents them).">route::Obstacles::via_mask()</a>); two vias then need their mask openings apart as well.  <br /></td></tr>
 <tr class="memitem:aa20166ccffb1fdaef2ab21ade09a634b" id="r_aa20166ccffb1fdaef2ab21ade09a634b"><td class="memItemLeft" align="right" valign="top"><a class="el" href="structtmk_1_1route_1_1Dir2.html">Dir2</a>&#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="#aa20166ccffb1fdaef2ab21ade09a634b">unit_dir</a> (int d)</td></tr>
 <tr class="memitem:af0d7ace1c1610cc889fe68aa988463af" id="r_af0d7ace1c1610cc889fe68aa988463af"><td class="memItemLeft" align="right" valign="top"><a class="el" href="structtmk_1_1route_1_1Dir2.html">Dir2</a>&#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="#af0d7ace1c1610cc889fe68aa988463af">left_normal</a> (int d)</td></tr>
 <tr class="memitem:a06630831c991a0d2cbf8c5b30ffd2ae3" id="r_a06630831c991a0d2cbf8c5b30ffd2ae3"><td class="memItemLeft" align="right" valign="top"><a class="el" href="structtmk_1_1geom_1_1Point.html">geom::Point</a>&#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="#a06630831c991a0d2cbf8c5b30ffd2ae3">offset_point</a> (<a class="el" href="structtmk_1_1geom_1_1Point.html">geom::Point</a> p, <a class="el" href="structtmk_1_1route_1_1Dir2.html">Dir2</a> v, double s)</td></tr>
@@ -206,6 +206,8 @@ Functions</h2></td></tr>
 <tr class="memitem:ae7af9fde486e92b6511f0d66f761bcb4" id="r_ae7af9fde486e92b6511f0d66f761bcb4"><td class="memItemLeft" align="right" valign="top"><a class="el" href="namespacetmk.html#acdd8166e81c544e7a3c2faf32e8147d6">Coord</a>&#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="#ae7af9fde486e92b6511f0d66f761bcb4">coupled_threshold</a> (const <a class="el" href="structtmk_1_1route_1_1PairRule.html">PairRule</a> &amp;r)</td></tr>
 <tr class="memdesc:ae7af9fde486e92b6511f0d66f761bcb4"><td class="mdescLeft">&#160;</td><td class="mdescRight">Edge gap up to which a sample counts as coupled: the pair's gap plus a quarter of it (at least 50 um), so lattice rounding and the miter at bends do not count as uncoupled while a single track wandering off does.  <br /></td></tr>
 <tr class="memitem:a059c41cb55028cf75fb3847e5b609993" id="r_a059c41cb55028cf75fb3847e5b609993"><td class="memItemLeft" align="right" valign="top"><a class="el" href="structtmk_1_1route_1_1PairStats.html">PairStats</a>&#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="#a059c41cb55028cf75fb3847e5b609993">measure_pair</a> (const std::vector&lt; <a class="el" href="structtmk_1_1model_1_1Track.html">model::Track</a> &gt; &amp;tracks, const std::vector&lt; <a class="el" href="structtmk_1_1model_1_1Via.html">model::Via</a> &gt; &amp;vias, <a class="el" href="namespacetmk_1_1model.html#a61db1ff7bad5e8c323a7f6c48aa8407c">model::NetId</a> a, <a class="el" href="namespacetmk_1_1model.html#a61db1ff7bad5e8c323a7f6c48aa8407c">model::NetId</a> c, <a class="el" href="namespacetmk.html#acdd8166e81c544e7a3c2faf32e8147d6">Coord</a> coupled_gap)</td></tr>
+<tr class="memitem:aed86fb7174fe66b1a08585c6718a3e7c" id="r_aed86fb7174fe66b1a08585c6718a3e7c"><td class="memItemLeft" align="right" valign="top"><a class="el" href="structtmk_1_1route_1_1PairStats.html">PairStats</a>&#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="#aed86fb7174fe66b1a08585c6718a3e7c">measure_pair</a> (const std::vector&lt; <a class="el" href="structtmk_1_1model_1_1Track.html">model::Track</a> &gt; &amp;tracks, const std::vector&lt; <a class="el" href="structtmk_1_1model_1_1Via.html">model::Via</a> &gt; &amp;vias, <a class="el" href="namespacetmk_1_1model.html#a61db1ff7bad5e8c323a7f6c48aa8407c">model::NetId</a> a, <a class="el" href="namespacetmk_1_1model.html#a61db1ff7bad5e8c323a7f6c48aa8407c">model::NetId</a> c, const std::vector&lt; <a class="el" href="namespacetmk.html#acdd8166e81c544e7a3c2faf32e8147d6">Coord</a> &gt; &amp;coupled_gap_on, <a class="el" href="namespacetmk.html#acdd8166e81c544e7a3c2faf32e8147d6">Coord</a> coupled_gap)</td></tr>
+<tr class="memdesc:aed86fb7174fe66b1a08585c6718a3e7c"><td class="mdescLeft">&#160;</td><td class="mdescRight">Per-layer thresholds (issue 61): a sample counts as coupled against the threshold of the copper layer index it runs on; layers without an entry (or a zero entry) fall back to the scalar threshold.  <br /></td></tr>
 <tr class="memitem:ab95dac11e866369f65ca38af2b48ac24" id="r_ab95dac11e866369f65ca38af2b48ac24"><td class="memItemLeft" align="right" valign="top">std::vector&lt; std::pair&lt; <a class="el" href="namespacetmk_1_1model.html#a61db1ff7bad5e8c323a7f6c48aa8407c">model::NetId</a>, <a class="el" href="namespacetmk_1_1model.html#a61db1ff7bad5e8c323a7f6c48aa8407c">model::NetId</a> &gt; &gt;&#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="#ab95dac11e866369f65ca38af2b48ac24">named_pairs</a> (const <a class="el" href="structtmk_1_1model_1_1Board.html">model::Board</a> &amp;b, const <a class="el" href="classtmk_1_1drc_1_1RuleEngine.html">drc::RuleEngine</a> &amp;re)</td></tr>
 <tr class="memdesc:ab95dac11e866369f65ca38af2b48ac24"><td class="mdescLeft">&#160;</td><td class="mdescRight">Net pairs KiCad treats as differential pairs (names ending in P/N or +/-), in net order.  <br /></td></tr>
 <tr class="memitem:af30d51a1f421a49a8cdb71930898dc78" id="r_af30d51a1f421a49a8cdb71930898dc78"><td class="memItemLeft" align="right" valign="top">std::pair&lt; <a class="el" href="namespacetmk.html#acdd8166e81c544e7a3c2faf32e8147d6">Coord</a>, <a class="el" href="namespacetmk.html#acdd8166e81c544e7a3c2faf32e8147d6">Coord</a> &gt;&#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="#af30d51a1f421a49a8cdb71930898dc78">pad_half_extents</a> (const <a class="el" href="structtmk_1_1model_1_1Pad.html">model::Pad</a> &amp;p)</td></tr>
@@ -304,7 +306,7 @@ Variables</h2></td></tr>
 <tr><td class="fieldname"><a id="aa07b2911aa3920d0a70125836a15e71ca8c6384dda98d8864d00e29dc96179970" name="aa07b2911aa3920d0a70125836a15e71ca8c6384dda98d8864d00e29dc96179970"></a>Cleanup&#160;</td><td class="fielddoc"></td></tr>
 </table>
 
-<p class="definition">Definition at line <a class="el" href="router_8hpp_source.html#l00384">384</a> of file <a class="el" href="router_8hpp_source.html">router.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="router_8hpp_source.html#l00397">397</a> of file <a class="el" href="router_8hpp_source.html">router.hpp</a>.</p>
 
 </div>
 </div>
@@ -540,7 +542,7 @@ Variables</h2></td></tr>
 
 <p>Edge gap up to which a sample counts as coupled: the pair's gap plus a quarter of it (at least 50 um), so lattice rounding and the miter at bends do not count as uncoupled while a single track wandering off does. </p>
 
-<p class="definition">Definition at line <a class="el" href="diff__pair_8hpp_source.html#l00061">61</a> of file <a class="el" href="diff__pair_8hpp_source.html">diff_pair.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="diff__pair_8hpp_source.html#l00065">65</a> of file <a class="el" href="diff__pair_8hpp_source.html">diff_pair.hpp</a>.</p>
 
 </div>
 </div>
@@ -807,8 +809,51 @@ Variables</h2></td></tr>
 
 </div>
 </div>
+<a id="aed86fb7174fe66b1a08585c6718a3e7c" name="aed86fb7174fe66b1a08585c6718a3e7c"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#aed86fb7174fe66b1a08585c6718a3e7c">&#9670;&#160;</a></span>measure_pair() <span class="overload">[1/2]</span></h2>
+
+<div class="memitem">
+<div class="memproto">
+      <table class="memname">
+        <tr>
+          <td class="memname"><a class="el" href="structtmk_1_1route_1_1PairStats.html">PairStats</a> tmk::route::measure_pair </td>
+          <td>(</td>
+          <td class="paramtype">const std::vector&lt; <a class="el" href="structtmk_1_1model_1_1Track.html">model::Track</a> &gt; &amp;</td>          <td class="paramname"><span class="paramname"><em>tracks</em></span>, </td>
+        </tr>
+        <tr>
+          <td class="paramkey"></td>
+          <td></td>
+          <td class="paramtype">const std::vector&lt; <a class="el" href="structtmk_1_1model_1_1Via.html">model::Via</a> &gt; &amp;</td>          <td class="paramname"><span class="paramname"><em>vias</em></span>, </td>
+        </tr>
+        <tr>
+          <td class="paramkey"></td>
+          <td></td>
+          <td class="paramtype"><a class="el" href="namespacetmk_1_1model.html#a61db1ff7bad5e8c323a7f6c48aa8407c">model::NetId</a></td>          <td class="paramname"><span class="paramname"><em>a</em></span>, </td>
+        </tr>
+        <tr>
+          <td class="paramkey"></td>
+          <td></td>
+          <td class="paramtype"><a class="el" href="namespacetmk_1_1model.html#a61db1ff7bad5e8c323a7f6c48aa8407c">model::NetId</a></td>          <td class="paramname"><span class="paramname"><em>c</em></span>, </td>
+        </tr>
+        <tr>
+          <td class="paramkey"></td>
+          <td></td>
+          <td class="paramtype">const std::vector&lt; <a class="el" href="namespacetmk.html#acdd8166e81c544e7a3c2faf32e8147d6">Coord</a> &gt; &amp;</td>          <td class="paramname"><span class="paramname"><em>coupled_gap_on</em></span>, </td>
+        </tr>
+        <tr>
+          <td class="paramkey"></td>
+          <td></td>
+          <td class="paramtype"><a class="el" href="namespacetmk.html#acdd8166e81c544e7a3c2faf32e8147d6">Coord</a></td>          <td class="paramname"><span class="paramname"><em>coupled_gap</em></span>&#160;)</td>
+        </tr>
+      </table>
+</div><div class="memdoc">
+
+<p>Per-layer thresholds (issue 61): a sample counts as coupled against the threshold of the copper layer index it runs on; layers without an entry (or a zero entry) fall back to the scalar threshold. </p>
+
+</div>
+</div>
 <a id="a059c41cb55028cf75fb3847e5b609993" name="a059c41cb55028cf75fb3847e5b609993"></a>
-<h2 class="memtitle"><span class="permalink"><a href="#a059c41cb55028cf75fb3847e5b609993">&#9670;&#160;</a></span>measure_pair()</h2>
+<h2 class="memtitle"><span class="permalink"><a href="#a059c41cb55028cf75fb3847e5b609993">&#9670;&#160;</a></span>measure_pair() <span class="overload">[2/2]</span></h2>
 
 <div class="memitem">
 <div class="memproto">
@@ -1035,8 +1080,8 @@ Variables</h2></td></tr>
 
 </div>
 </div>
-<a id="a1713d7202f73ee0f2d2d867e88e3d430" name="a1713d7202f73ee0f2d2d867e88e3d430"></a>
-<h2 class="memtitle"><span class="permalink"><a href="#a1713d7202f73ee0f2d2d867e88e3d430">&#9670;&#160;</a></span>pair_rule()</h2>
+<a id="aadca4c7c3a34a4d3e541b049ba2c647d" name="aadca4c7c3a34a4d3e541b049ba2c647d"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#aadca4c7c3a34a4d3e541b049ba2c647d">&#9670;&#160;</a></span>pair_rule()</h2>
 
 <div class="memitem">
 <div class="memproto">
@@ -1069,12 +1114,18 @@ Variables</h2></td></tr>
         <tr>
           <td class="paramkey"></td>
           <td></td>
-          <td class="paramtype"><a class="el" href="namespacetmk.html#acdd8166e81c544e7a3c2faf32e8147d6">Coord</a></td>          <td class="paramname"><span class="paramname"><em>via_mask</em></span><span class="paramdefsep"> = </span><span class="paramdefval">0</span>&#160;)</td>
+          <td class="paramtype"><a class="el" href="namespacetmk.html#acdd8166e81c544e7a3c2faf32e8147d6">Coord</a></td>          <td class="paramname"><span class="paramname"><em>via_mask</em></span><span class="paramdefsep"> = </span><span class="paramdefval">0</span>, </td>
+        </tr>
+        <tr>
+          <td class="paramkey"></td>
+          <td></td>
+          <td class="paramtype">const std::string &amp;</td>          <td class="paramname"><span class="paramname"><em>layer</em></span><span class="paramdefsep"> = </span><span class="paramdefval">&quot;&quot;</span>&#160;)</td>
         </tr>
       </table>
 </div><div class="memdoc">
 
 <p><span class="tt">via_mask</span>: solder-mask expansion of untented vias (<a class="el" href="classtmk_1_1route_1_1Obstacles.html#abbc4f460a26b46e9735d15bd2c81adbd" title="Solder-mask expansion the checks give untented vias (0 when the board tents them).">route::Obstacles::via_mask()</a>); two vias then need their mask openings apart as well. </p>
+<p><span class="tt">layer</span>: a copper layer name - where the classes carry solved per-layer pair widths or gaps (issue 37's maps), they replace the class-derived width and gap for that layer (issue 38 item 3c); the empty name, and layers without entries, give the scalar rule. </p>
 
 </div>
 </div>
@@ -1502,7 +1553,7 @@ Variables</h2></td></tr>
 
 <p>Variant indices from here up are the advised copies the portfolio adds when <a class="el" href="structtmk_1_1route_1_1RouterOptions.html#a71e9bf1534dd6edf71aa3fc97724afd3">RouterOptions::advice</a> is active (position k of the advice's variants has index kAdvisedIndex + k). </p>
 
-<p class="definition">Definition at line <a class="el" href="router_8hpp_source.html#l00507">507</a> of file <a class="el" href="router_8hpp_source.html">router.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="router_8hpp_source.html#l00523">523</a> of file <a class="el" href="router_8hpp_source.html">router.hpp</a>.</p>
 
 </div>
 </div>
@@ -1577,7 +1628,7 @@ Variables</h2></td></tr>
 <p>With soft zones a fill of at least this area that no pad touches is its net's plane: a connection target of its own (doc 05 §26). </p>
 <p>Smaller ones are slivers of a stale fill, which a refill may drop or reshape. 1 mm^2 </p>
 
-<p class="definition">Definition at line <a class="el" href="obstacles_8hpp_source.html#l00238">238</a> of file <a class="el" href="obstacles_8hpp_source.html">obstacles.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="obstacles_8hpp_source.html#l00245">245</a> of file <a class="el" href="obstacles_8hpp_source.html">obstacles.hpp</a>.</p>
 
 </div>
 </div>
@@ -1601,7 +1652,7 @@ Variables</h2></td></tr>
 </table>
 </div><div class="memdoc">
 
-<p class="definition">Definition at line <a class="el" href="router_8hpp_source.html#l00385">385</a> of file <a class="el" href="router_8hpp_source.html">router.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="router_8hpp_source.html#l00398">398</a> of file <a class="el" href="router_8hpp_source.html">router.hpp</a>.</p>
 
 </div>
 </div>

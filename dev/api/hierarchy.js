@@ -298,6 +298,7 @@ var hierarchy =
     [ "tmk::drc::Violation", "structtmk_1_1drc_1_1Violation.html", null ],
     [ "tmk::drc::ViolationItem", "structtmk_1_1drc_1_1ViolationItem.html", null ],
     [ "tmk::place::Violations", "structtmk_1_1place_1_1Violations.html", null ],
+    [ "tmk::analysis::PinEscape::WallItem", "structtmk_1_1analysis_1_1PinEscape_1_1WallItem.html", null ],
     [ "tmk::passes::WidenNet", "structtmk_1_1passes_1_1WidenNet.html", null ],
     [ "tmk::passes::WidenOptions", "structtmk_1_1passes_1_1WidenOptions.html", null ],
     [ "tmk::passes::WidenResult", "structtmk_1_1passes_1_1WidenResult.html", null ],

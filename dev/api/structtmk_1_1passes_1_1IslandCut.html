@@ -116,7 +116,7 @@ Public Attributes</h2></td></tr>
 <div class="textblock"><p>Copper that joins no pad after a run and is the run's doing (doc 20 §2.14, D198). </p>
 <p>Lifting part of a route can leave a piece of it standing: a via and two short tracks, or a run on an inner layer whose vias went. The router counts pads, so such a board is complete for it, but KiCad counts every piece of copper of a net and reports the piece as unconnected. <span class="tt">now</span> is the input as it is after the run (lifted copper gone), <span class="tt">new_tracks</span> and <span class="tt">new_vias</span> the run's copper, <span class="tt">before</span> the input as read. A group of touching tracks and vias with no pad, zone, graphic, arc, locked item or free via in it is cut when it holds new copper, or when one of its items was joined to a pad in <span class="tt">before</span>. A group that joined no pad in the input either is the user's and stays. Links are KiCad's (copper of one net that overlaps is joined), so nothing KiCad sees as connected is cut. </p>
 
-<p class="definition">Definition at line <a class="el" href="repair_8hpp_source.html#l00090">90</a> of file <a class="el" href="repair_8hpp_source.html">repair.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="repair_8hpp_source.html#l00099">99</a> of file <a class="el" href="repair_8hpp_source.html">repair.hpp</a>.</p>
 </div><a name="doc-func-members" id="doc-func-members"></a><h2 id="header-doc-func-members" class="groupheader">Member Function Documentation</h2>
 <a id="ad6dde265f53995a2eb961ccfeccf867d" name="ad6dde265f53995a2eb961ccfeccf867d"></a>
 <h2 class="memtitle"><span class="permalink"><a href="#ad6dde265f53995a2eb961ccfeccf867d">&#9670;&#160;</a></span>any()</h2>
@@ -141,7 +141,7 @@ Public Attributes</h2></td></tr>
 </table>
 </div><div class="memdoc">
 
-<p class="definition">Definition at line <a class="el" href="repair_8hpp_source.html#l00094">94</a> of file <a class="el" href="repair_8hpp_source.html">repair.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="repair_8hpp_source.html#l00103">103</a> of file <a class="el" href="repair_8hpp_source.html">repair.hpp</a>.</p>
 
 </div>
 </div>
@@ -158,7 +158,7 @@ Public Attributes</h2></td></tr>
       </table>
 </div><div class="memdoc">
 
-<p class="definition">Definition at line <a class="el" href="repair_8hpp_source.html#l00091">91</a> of file <a class="el" href="repair_8hpp_source.html">repair.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="repair_8hpp_source.html#l00100">100</a> of file <a class="el" href="repair_8hpp_source.html">repair.hpp</a>.</p>
 
 </div>
 </div>
@@ -176,7 +176,7 @@ Public Attributes</h2></td></tr>
 
 <p>indices into now.tracks / now.vias, ascending </p>
 
-<p class="definition">Definition at line <a class="el" href="repair_8hpp_source.html#l00091">91</a> of file <a class="el" href="repair_8hpp_source.html">repair.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="repair_8hpp_source.html#l00100">100</a> of file <a class="el" href="repair_8hpp_source.html">repair.hpp</a>.</p>
 
 </div>
 </div>
@@ -192,7 +192,7 @@ Public Attributes</h2></td></tr>
       </table>
 </div><div class="memdoc">
 
-<p class="definition">Definition at line <a class="el" href="repair_8hpp_source.html#l00093">93</a> of file <a class="el" href="repair_8hpp_source.html">repair.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="repair_8hpp_source.html#l00102">102</a> of file <a class="el" href="repair_8hpp_source.html">repair.hpp</a>.</p>
 
 </div>
 </div>
@@ -208,7 +208,7 @@ Public Attributes</h2></td></tr>
       </table>
 </div><div class="memdoc">
 
-<p class="definition">Definition at line <a class="el" href="repair_8hpp_source.html#l00092">92</a> of file <a class="el" href="repair_8hpp_source.html">repair.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="repair_8hpp_source.html#l00101">101</a> of file <a class="el" href="repair_8hpp_source.html">repair.hpp</a>.</p>
 
 </div>
 </div>
@@ -226,7 +226,7 @@ Public Attributes</h2></td></tr>
 
 <p>per new track / via: 1 = cut </p>
 
-<p class="definition">Definition at line <a class="el" href="repair_8hpp_source.html#l00092">92</a> of file <a class="el" href="repair_8hpp_source.html">repair.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="repair_8hpp_source.html#l00101">101</a> of file <a class="el" href="repair_8hpp_source.html">repair.hpp</a>.</p>
 
 </div>
 </div>

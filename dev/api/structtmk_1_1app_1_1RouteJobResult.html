@@ -99,6 +99,8 @@ $(function(){initNavTree('structtmk_1_1app_1_1RouteJobResult.html','','structtmk
 Public Member Functions</h2></td></tr>
 <tr class="memitem:a59ca0c75709325642638e06eea5bd0e7" id="r_a59ca0c75709325642638e06eea5bd0e7"><td class="memItemLeft" align="right" valign="top">int&#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="#a59ca0c75709325642638e06eea5bd0e7">exit_code</a> () const</td></tr>
 <tr class="memdesc:a59ca0c75709325642638e06eea5bd0e7"><td class="mdescLeft">&#160;</td><td class="mdescRight">0 when everything planned was routed (and, with soft zones, nothing is unconnected after the refill).  <br /></td></tr>
+<tr class="memitem:a4b4f1093d7f1636799e61b64e4589287" id="r_a4b4f1093d7f1636799e61b64e4589287"><td class="memItemLeft" align="right" valign="top">const char *&#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="#a4b4f1093d7f1636799e61b64e4589287">exit_reason</a> () const</td></tr>
+<tr class="memdesc:a4b4f1093d7f1636799e61b64e4589287"><td class="mdescLeft">&#160;</td><td class="mdescRight">Why <a class="el" href="#a59ca0c75709325642638e06eea5bd0e7" title="0 when everything planned was routed (and, with soft zones, nothing is unconnected after the refill).">exit_code()</a> is what it is (issue 43): exit 3 conflates connections the router left open with pours KiCad's zone refill would leave unconnected on an otherwise complete board.  <br /></td></tr>
 </table><table class="memberdecls">
 <tr class="heading"><td colspan="2"><h2 id="header-pub-attribs" class="groupheader"><a id="pub-attribs" name="pub-attribs"></a>
 Public Attributes</h2></td></tr>
@@ -114,7 +116,7 @@ Public Attributes</h2></td></tr>
 </table>
 <a name="details" id="details"></a><h2 id="header-details" class="groupheader">Detailed Description</h2>
 <div class="textblock">
-<p class="definition">Definition at line <a class="el" href="route__job_8hpp_source.html#l00186">186</a> of file <a class="el" href="route__job_8hpp_source.html">route_job.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="route__job_8hpp_source.html#l00193">193</a> of file <a class="el" href="route__job_8hpp_source.html">route_job.hpp</a>.</p>
 </div><a name="doc-func-members" id="doc-func-members"></a><h2 id="header-doc-func-members" class="groupheader">Member Function Documentation</h2>
 <a id="a59ca0c75709325642638e06eea5bd0e7" name="a59ca0c75709325642638e06eea5bd0e7"></a>
 <h2 class="memtitle"><span class="permalink"><a href="#a59ca0c75709325642638e06eea5bd0e7">&#9670;&#160;</a></span>exit_code()</h2>
@@ -141,7 +143,37 @@ Public Attributes</h2></td></tr>
 
 <p>0 when everything planned was routed (and, with soft zones, nothing is unconnected after the refill). </p>
 
-<p class="definition">Definition at line <a class="el" href="route__job_8hpp_source.html#l00193">193</a> of file <a class="el" href="route__job_8hpp_source.html">route_job.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="route__job_8hpp_source.html#l00200">200</a> of file <a class="el" href="route__job_8hpp_source.html">route_job.hpp</a>.</p>
+
+</div>
+</div>
+<a id="a4b4f1093d7f1636799e61b64e4589287" name="a4b4f1093d7f1636799e61b64e4589287"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#a4b4f1093d7f1636799e61b64e4589287">&#9670;&#160;</a></span>exit_reason()</h2>
+
+<div class="memitem">
+<div class="memproto">
+<table class="mlabels">
+  <tr>
+  <td class="mlabels-left">
+      <table class="memname">
+        <tr>
+          <td class="memname">const char * tmk::app::RouteJobResult::exit_reason </td>
+          <td>(</td>
+          <td class="paramname"><span class="paramname"><em></em></span></td><td>)</td>
+          <td> const</td>
+        </tr>
+      </table>
+  </td>
+  <td class="mlabels-right">
+<span class="mlabels"><span class="mlabel inline">inline</span></span>  </td>
+  </tr>
+</table>
+</div><div class="memdoc">
+
+<p>Why <a class="el" href="#a59ca0c75709325642638e06eea5bd0e7" title="0 when everything planned was routed (and, with soft zones, nothing is unconnected after the refill).">exit_code()</a> is what it is (issue 43): exit 3 conflates connections the router left open with pours KiCad's zone refill would leave unconnected on an otherwise complete board. </p>
+<p>The route JSON summary carries this discriminator so callers can tell them apart. The discriminator is the routed count, not the refill count (issue 54): unconnected_after_refill counts every unconnected item on the refilled board, the pads of connections the router never routed included, so keying the reason on it labels any soft-zones job with genuine opens "unconnected_after_refill". Only a job that routed everything it planned and still exits 3 earns that reason. </p>
+
+<p class="definition">Definition at line <a class="el" href="route__job_8hpp_source.html#l00209">209</a> of file <a class="el" href="route__job_8hpp_source.html">route_job.hpp</a>.</p>
 
 </div>
 </div>
@@ -160,7 +192,7 @@ Public Attributes</h2></td></tr>
 
 <p>new copper in the &ndash;emit-items layout (layer and net by name, nm) </p>
 
-<p class="definition">Definition at line <a class="el" href="route__job_8hpp_source.html#l00188">188</a> of file <a class="el" href="route__job_8hpp_source.html">route_job.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="route__job_8hpp_source.html#l00195">195</a> of file <a class="el" href="route__job_8hpp_source.html">route_job.hpp</a>.</p>
 
 </div>
 </div>
@@ -176,7 +208,7 @@ Public Attributes</h2></td></tr>
       </table>
 </div><div class="memdoc">
 
-<p class="definition">Definition at line <a class="el" href="route__job_8hpp_source.html#l00187">187</a> of file <a class="el" href="route__job_8hpp_source.html">route_job.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="route__job_8hpp_source.html#l00194">194</a> of file <a class="el" href="route__job_8hpp_source.html">route_job.hpp</a>.</p>
 
 </div>
 </div>
@@ -194,7 +226,7 @@ Public Attributes</h2></td></tr>
 
 <p>the &ndash;json layout </p>
 
-<p class="definition">Definition at line <a class="el" href="route__job_8hpp_source.html#l00189">189</a> of file <a class="el" href="route__job_8hpp_source.html">route_job.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="route__job_8hpp_source.html#l00196">196</a> of file <a class="el" href="route__job_8hpp_source.html">route_job.hpp</a>.</p>
 
 </div>
 </div>
@@ -212,7 +244,7 @@ Public Attributes</h2></td></tr>
 
 <p>with soft zones: what KiCad's refill would leave unconnected </p>
 
-<p class="definition">Definition at line <a class="el" href="route__job_8hpp_source.html#l00191">191</a> of file <a class="el" href="route__job_8hpp_source.html">route_job.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="route__job_8hpp_source.html#l00198">198</a> of file <a class="el" href="route__job_8hpp_source.html">route_job.hpp</a>.</p>
 
 </div>
 </div>
@@ -230,7 +262,7 @@ Public Attributes</h2></td></tr>
 
 <p>empty when not viewing </p>
 
-<p class="definition">Definition at line <a class="el" href="route__job_8hpp_source.html#l00190">190</a> of file <a class="el" href="route__job_8hpp_source.html">route_job.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="route__job_8hpp_source.html#l00197">197</a> of file <a class="el" href="route__job_8hpp_source.html">route_job.hpp</a>.</p>
 
 </div>
 </div>

@@ -20,6 +20,7 @@ var searchData=
   ['evaluate_17',['evaluate',['../classtmk_1_1place_1_1detail_1_1Annealer.html#a8f3f94499dfd69c834069f387d68c8df',1,'tmk::place::detail::Annealer::evaluate()'],['../namespacetmk_1_1crules.html#a5f1151ea99e823810b8a697bd0570797',1,'tmk::crules::evaluate()']]],
   ['even_5fodd_18',['even_odd',['../namespacetmk_1_1geom.html#ace003f29d7932a1cdf13788320cc8b99',1,'tmk::geom']]],
   ['exit_5fcode_19',['exit_code',['../structtmk_1_1app_1_1RouteJobResult.html#a59ca0c75709325642638e06eea5bd0e7',1,'tmk::app::RouteJobResult']]],
-  ['exposed_20',['exposed',['../classtmk_1_1server_1_1ViewerServer.html#a895be2de92704b6707e029f2b261af24',1,'tmk::server::ViewerServer']]],
-  ['extract_21',['extract',['../namespacetmk_1_1place.html#aa8585105a8a55b203699bd411f36b338',1,'tmk::place']]]
+  ['exit_5freason_20',['exit_reason',['../structtmk_1_1app_1_1RouteJobResult.html#a4b4f1093d7f1636799e61b64e4589287',1,'tmk::app::RouteJobResult']]],
+  ['exposed_21',['exposed',['../classtmk_1_1server_1_1ViewerServer.html#a895be2de92704b6707e029f2b261af24',1,'tmk::server::ViewerServer']]],
+  ['extract_22',['extract',['../namespacetmk_1_1place.html#aa8585105a8a55b203699bd411f36b338',1,'tmk::place']]]
 ];

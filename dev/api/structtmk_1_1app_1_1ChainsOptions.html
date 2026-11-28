@@ -111,6 +111,14 @@ Public Attributes</h2></td></tr>
 <tr class="memdesc:ab6f4150754d0909ddaaf425493d0978a"><td class="mdescLeft">&#160;</td><td class="mdescRight">blocker sets larger than this are not shrunk (one run per member)  <br /></td></tr>
 <tr class="memitem:ad4f3d48f722738916c832204cb3aafcd" id="r_ad4f3d48f722738916c832204cb3aafcd"><td class="memItemLeft" align="right" valign="top">double&#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="#ad4f3d48f722738916c832204cb3aafcd">rip_mm</a> = 1.0</td></tr>
 <tr class="memdesc:ad4f3d48f722738916c832204cb3aafcd"><td class="mdescLeft">&#160;</td><td class="mdescRight">a blocker's copper is lifted within this distance of the new route (0 = the whole net)  <br /></td></tr>
+<tr class="memitem:ab104b50458653e4b3f583721a8f98382" id="r_ab104b50458653e4b3f583721a8f98382"><td class="memItemLeft" align="right" valign="top">bool&#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="#ab104b50458653e4b3f583721a8f98382">clique</a> = true</td></tr>
+<tr class="memdesc:ab104b50458653e4b3f583721a8f98382"><td class="mdescLeft">&#160;</td><td class="mdescRight">Phase 3B (issue 30): when a chain fails too_deep or lifted_net_no_path_bare, one bounded clique attempt at the root: the nets the recursion lifted or blamed (pair-closed, 3..clique_max_nets) are lifted inside a window around the root and deepest-victim pads and routed together by the portfolio under clique_work.  <br /></td></tr>
+<tr class="memitem:af327bdc673d286bb8222e11521d1004a" id="r_af327bdc673d286bb8222e11521d1004a"><td class="memItemLeft" align="right" valign="top">long&#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="#af327bdc673d286bb8222e11521d1004a">clique_work</a> = 8'000'000</td></tr>
+<tr class="memdesc:af327bdc673d286bb8222e11521d1004a"><td class="mdescLeft">&#160;</td><td class="mdescRight">work budget of the clique portfolio attempt  <br /></td></tr>
+<tr class="memitem:adef53e3098fa4adb79d22eb75b31fd0d" id="r_adef53e3098fa4adb79d22eb75b31fd0d"><td class="memItemLeft" align="right" valign="top">int&#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="#adef53e3098fa4adb79d22eb75b31fd0d">clique_variants</a> = 6</td></tr>
+<tr class="memdesc:adef53e3098fa4adb79d22eb75b31fd0d"><td class="mdescLeft">&#160;</td><td class="mdescRight">portfolio variants of the attempt (4..8 by design)  <br /></td></tr>
+<tr class="memitem:aab95655f5be40628107db56afcb5eee5" id="r_aab95655f5be40628107db56afcb5eee5"><td class="memItemLeft" align="right" valign="top">int&#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="#aab95655f5be40628107db56afcb5eee5">clique_max_nets</a> = 12</td></tr>
+<tr class="memdesc:aab95655f5be40628107db56afcb5eee5"><td class="mdescLeft">&#160;</td><td class="mdescRight">conflict sets larger than this are not attempted  <br /></td></tr>
 <tr class="memitem:af4a0e5914ed45e9e2faeebc5ce4ff88b" id="r_af4a0e5914ed45e9e2faeebc5ce4ff88b"><td class="memItemLeft" align="right" valign="top">int&#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="#af4a0e5914ed45e9e2faeebc5ce4ff88b">threads</a> = 8</td></tr>
 <tr class="memdesc:af4a0e5914ed45e9e2faeebc5ce4ff88b"><td class="mdescLeft">&#160;</td><td class="mdescRight">open connections measured at once (the result does not depend on it)  <br /></td></tr>
 <tr class="memitem:a0c4c97285dd81b4014be6b201996e5a1" id="r_a0c4c97285dd81b4014be6b201996e5a1"><td class="memItemLeft" align="right" valign="top">std::uint64_t&#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="#a0c4c97285dd81b4014be6b201996e5a1">seed</a> = 1</td></tr>
@@ -126,7 +134,7 @@ Public Attributes</h2></td></tr>
 </table>
 <a name="details" id="details"></a><h2 id="header-details" class="groupheader">Detailed Description</h2>
 <div class="textblock">
-<p class="definition">Definition at line <a class="el" href="chains_8hpp_source.html#l00027">27</a> of file <a class="el" href="chains_8hpp_source.html">chains.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="chains_8hpp_source.html#l00034">34</a> of file <a class="el" href="chains_8hpp_source.html">chains.hpp</a>.</p>
 </div><a name="doc-variable-members" id="doc-variable-members"></a><h2 id="header-doc-variable-members" class="groupheader">Member Data Documentation</h2>
 <a id="a0d74051ef6064de2fde3a28be180609c" name="a0d74051ef6064de2fde3a28be180609c"></a>
 <h2 class="memtitle"><span class="permalink"><a href="#a0d74051ef6064de2fde3a28be180609c">&#9670;&#160;</a></span>apply_out</h2>
@@ -143,7 +151,7 @@ Public Attributes</h2></td></tr>
 <p>Not only measured: the chains that close are put on the board, one open connection after the other (each on the board the ones before left), and the board is written here (doc 20 §2.16, D200). </p>
 <p>It is written only when fewer connections are open than on the input and every net that was lifted is joined as it was; copper left with no pad on it is taken off (D198). </p>
 
-<p class="definition">Definition at line <a class="el" href="chains_8hpp_source.html#l00042">42</a> of file <a class="el" href="chains_8hpp_source.html">chains.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="chains_8hpp_source.html#l00057">57</a> of file <a class="el" href="chains_8hpp_source.html">chains.hpp</a>.</p>
 
 </div>
 </div>
@@ -162,7 +170,7 @@ Public Attributes</h2></td></tr>
 <p>Applied mode only: how many passes over the still-open connections. </p>
 <p>A chain that fails on the board as it was may close on the board the chains before it left (and one that closed may have been blocking a later one), so a second sweep is the bounded form of backtracking over chain order. 1 = the D200 behaviour. </p>
 
-<p class="definition">Definition at line <a class="el" href="chains_8hpp_source.html#l00046">46</a> of file <a class="el" href="chains_8hpp_source.html">chains.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="chains_8hpp_source.html#l00061">61</a> of file <a class="el" href="chains_8hpp_source.html">chains.hpp</a>.</p>
 
 </div>
 </div>
@@ -180,7 +188,7 @@ Public Attributes</h2></td></tr>
 
 <p>work of the run on the board as it is </p>
 
-<p class="definition">Definition at line <a class="el" href="chains_8hpp_source.html#l00029">29</a> of file <a class="el" href="chains_8hpp_source.html">chains.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="chains_8hpp_source.html#l00036">36</a> of file <a class="el" href="chains_8hpp_source.html">chains.hpp</a>.</p>
 
 </div>
 </div>
@@ -199,7 +207,80 @@ Public Attributes</h2></td></tr>
 <p>A <span class="tt">causes</span> report (tracemaker causes &ndash;json) for the same board: connections it proves cannot be closed by rearranging copper (no_path_bare, pin_cannot_escape) are not attempted at all, and the rest are attempted in cause order, the ones rearrangement can fix first. </p>
 <p>Empty = every connection attempted in baseline order. </p>
 
-<p class="definition">Definition at line <a class="el" href="chains_8hpp_source.html#l00050">50</a> of file <a class="el" href="chains_8hpp_source.html">chains.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="chains_8hpp_source.html#l00065">65</a> of file <a class="el" href="chains_8hpp_source.html">chains.hpp</a>.</p>
+
+</div>
+</div>
+<a id="ab104b50458653e4b3f583721a8f98382" name="ab104b50458653e4b3f583721a8f98382"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#ab104b50458653e4b3f583721a8f98382">&#9670;&#160;</a></span>clique</h2>
+
+<div class="memitem">
+<div class="memproto">
+      <table class="memname">
+        <tr>
+          <td class="memname">bool tmk::app::ChainsOptions::clique = true</td>
+        </tr>
+      </table>
+</div><div class="memdoc">
+
+<p>Phase 3B (issue 30): when a chain fails too_deep or lifted_net_no_path_bare, one bounded clique attempt at the root: the nets the recursion lifted or blamed (pair-closed, 3..clique_max_nets) are lifted inside a window around the root and deepest-victim pads and routed together by the portfolio under clique_work. </p>
+<p>Committed only when the failed connection closes and no clique net ends worse. Off with clique = false (the A/B measurement switch). </p>
+
+<p class="definition">Definition at line <a class="el" href="chains_8hpp_source.html#l00046">46</a> of file <a class="el" href="chains_8hpp_source.html">chains.hpp</a>.</p>
+
+</div>
+</div>
+<a id="aab95655f5be40628107db56afcb5eee5" name="aab95655f5be40628107db56afcb5eee5"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#aab95655f5be40628107db56afcb5eee5">&#9670;&#160;</a></span>clique_max_nets</h2>
+
+<div class="memitem">
+<div class="memproto">
+      <table class="memname">
+        <tr>
+          <td class="memname">int tmk::app::ChainsOptions::clique_max_nets = 12</td>
+        </tr>
+      </table>
+</div><div class="memdoc">
+
+<p>conflict sets larger than this are not attempted </p>
+
+<p class="definition">Definition at line <a class="el" href="chains_8hpp_source.html#l00049">49</a> of file <a class="el" href="chains_8hpp_source.html">chains.hpp</a>.</p>
+
+</div>
+</div>
+<a id="adef53e3098fa4adb79d22eb75b31fd0d" name="adef53e3098fa4adb79d22eb75b31fd0d"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#adef53e3098fa4adb79d22eb75b31fd0d">&#9670;&#160;</a></span>clique_variants</h2>
+
+<div class="memitem">
+<div class="memproto">
+      <table class="memname">
+        <tr>
+          <td class="memname">int tmk::app::ChainsOptions::clique_variants = 6</td>
+        </tr>
+      </table>
+</div><div class="memdoc">
+
+<p>portfolio variants of the attempt (4..8 by design) </p>
+
+<p class="definition">Definition at line <a class="el" href="chains_8hpp_source.html#l00048">48</a> of file <a class="el" href="chains_8hpp_source.html">chains.hpp</a>.</p>
+
+</div>
+</div>
+<a id="af327bdc673d286bb8222e11521d1004a" name="af327bdc673d286bb8222e11521d1004a"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#af327bdc673d286bb8222e11521d1004a">&#9670;&#160;</a></span>clique_work</h2>
+
+<div class="memitem">
+<div class="memproto">
+      <table class="memname">
+        <tr>
+          <td class="memname">long tmk::app::ChainsOptions::clique_work = 8'000'000</td>
+        </tr>
+      </table>
+</div><div class="memdoc">
+
+<p>work budget of the clique portfolio attempt </p>
+
+<p class="definition">Definition at line <a class="el" href="chains_8hpp_source.html#l00047">47</a> of file <a class="el" href="chains_8hpp_source.html">chains.hpp</a>.</p>
 
 </div>
 </div>
@@ -217,7 +298,7 @@ Public Attributes</h2></td></tr>
 
 <p>as <span class="tt">causes</span> </p>
 
-<p class="definition">Definition at line <a class="el" href="chains_8hpp_source.html#l00037">37</a> of file <a class="el" href="chains_8hpp_source.html">chains.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="chains_8hpp_source.html#l00052">52</a> of file <a class="el" href="chains_8hpp_source.html">chains.hpp</a>.</p>
 
 </div>
 </div>
@@ -235,7 +316,7 @@ Public Attributes</h2></td></tr>
 
 <p>chains deeper than this are given up </p>
 
-<p class="definition">Definition at line <a class="el" href="chains_8hpp_source.html#l00031">31</a> of file <a class="el" href="chains_8hpp_source.html">chains.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="chains_8hpp_source.html#l00038">38</a> of file <a class="el" href="chains_8hpp_source.html">chains.hpp</a>.</p>
 
 </div>
 </div>
@@ -253,7 +334,7 @@ Public Attributes</h2></td></tr>
 
 <p>and chains that lift more nets than this in all </p>
 
-<p class="definition">Definition at line <a class="el" href="chains_8hpp_source.html#l00032">32</a> of file <a class="el" href="chains_8hpp_source.html">chains.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="chains_8hpp_source.html#l00039">39</a> of file <a class="el" href="chains_8hpp_source.html">chains.hpp</a>.</p>
 
 </div>
 </div>
@@ -271,7 +352,7 @@ Public Attributes</h2></td></tr>
 
 <p>blocker sets larger than this are not shrunk (one run per member) </p>
 
-<p class="definition">Definition at line <a class="el" href="chains_8hpp_source.html#l00033">33</a> of file <a class="el" href="chains_8hpp_source.html">chains.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="chains_8hpp_source.html#l00040">40</a> of file <a class="el" href="chains_8hpp_source.html">chains.hpp</a>.</p>
 
 </div>
 </div>
@@ -289,7 +370,7 @@ Public Attributes</h2></td></tr>
 
 <p>a blocker's copper is lifted within this distance of the new route (0 = the whole net) </p>
 
-<p class="definition">Definition at line <a class="el" href="chains_8hpp_source.html#l00034">34</a> of file <a class="el" href="chains_8hpp_source.html">chains.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="chains_8hpp_source.html#l00041">41</a> of file <a class="el" href="chains_8hpp_source.html">chains.hpp</a>.</p>
 
 </div>
 </div>
@@ -307,7 +388,7 @@ Public Attributes</h2></td></tr>
 
 <p>read the rules beside this board instead </p>
 
-<p class="definition">Definition at line <a class="el" href="chains_8hpp_source.html#l00028">28</a> of file <a class="el" href="chains_8hpp_source.html">chains.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="chains_8hpp_source.html#l00035">35</a> of file <a class="el" href="chains_8hpp_source.html">chains.hpp</a>.</p>
 
 </div>
 </div>
@@ -323,7 +404,7 @@ Public Attributes</h2></td></tr>
       </table>
 </div><div class="memdoc">
 
-<p class="definition">Definition at line <a class="el" href="chains_8hpp_source.html#l00036">36</a> of file <a class="el" href="chains_8hpp_source.html">chains.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="chains_8hpp_source.html#l00051">51</a> of file <a class="el" href="chains_8hpp_source.html">chains.hpp</a>.</p>
 
 </div>
 </div>
@@ -339,7 +420,7 @@ Public Attributes</h2></td></tr>
       </table>
 </div><div class="memdoc">
 
-<p class="definition">Definition at line <a class="el" href="chains_8hpp_source.html#l00038">38</a> of file <a class="el" href="chains_8hpp_source.html">chains.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="chains_8hpp_source.html#l00053">53</a> of file <a class="el" href="chains_8hpp_source.html">chains.hpp</a>.</p>
 
 </div>
 </div>
@@ -357,7 +438,7 @@ Public Attributes</h2></td></tr>
 
 <p>open connections measured at once (the result does not depend on it) </p>
 
-<p class="definition">Definition at line <a class="el" href="chains_8hpp_source.html#l00035">35</a> of file <a class="el" href="chains_8hpp_source.html">chains.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="chains_8hpp_source.html#l00050">50</a> of file <a class="el" href="chains_8hpp_source.html">chains.hpp</a>.</p>
 
 </div>
 </div>
@@ -375,7 +456,7 @@ Public Attributes</h2></td></tr>
 
 <p>work of each run on a changed copy </p>
 
-<p class="definition">Definition at line <a class="el" href="chains_8hpp_source.html#l00030">30</a> of file <a class="el" href="chains_8hpp_source.html">chains.hpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="chains_8hpp_source.html#l00037">37</a> of file <a class="el" href="chains_8hpp_source.html">chains.hpp</a>.</p>
 
 </div>
 </div>

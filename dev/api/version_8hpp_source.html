@@ -99,8 +99,17 @@ $(function(){initNavTree('version_8hpp_source.html','',''); });
 <div class="line"><a id="l00005" name="l00005"></a><span class="lineno">    5</span><span class="keyword">namespace </span><a class="code hl_namespace" href="namespacetmk.html">tmk</a> {</div>
 <div class="line"><a id="l00006" name="l00006"></a><span class="lineno">    6</span><span class="comment">// TraceMaker version string, e.g. &quot;0.1.0&quot;.</span></div>
 <div class="line"><a id="l00007" name="l00007"></a><span class="lineno"><a class="line" href="namespacetmk.html#aa03a0d691db43504fd8b479a756bea11">    7</a></span>std::string_view <a class="code hl_function" href="namespacetmk.html#aa03a0d691db43504fd8b479a756bea11">version</a>();</div>
-<div class="line"><a id="l00008" name="l00008"></a><span class="lineno">    8</span>}  <span class="comment">// namespace tmk</span></div>
+<div class="line"><a id="l00008" name="l00008"></a><span class="lineno">    8</span> </div>
+<div class="line"><a id="l00009" name="l00009"></a><span class="lineno">    9</span><span class="comment">// What one --work expansion unit covers (issue 41). Version 1 is the upstream 0.12.1 accounting;</span></div>
+<div class="line"><a id="l00010" name="l00010"></a><span class="lineno">   10</span><span class="comment">// version 2 folds the pair leg checks and the via-shove / pin-rescue / via-retry work into the</span></div>
+<div class="line"><a id="l00011" name="l00011"></a><span class="lineno">   11</span><span class="comment">// expansion count, so a budget calibrated under version 1 buys measurably less search under</span></div>
+<div class="line"><a id="l00012" name="l00012"></a><span class="lineno">   12</span><span class="comment">// version 2 (about half the reach on the Nomad reference fixture). Bump this whenever the</span></div>
+<div class="line"><a id="l00013" name="l00013"></a><span class="lineno">   13</span><span class="comment">// accounting changes and say so at the --work entry of the CLI reference; it is emitted in the</span></div>
+<div class="line"><a id="l00014" name="l00014"></a><span class="lineno">   14</span><span class="comment">// route JSON as work_accounting_version, next to the expansions count.</span></div>
+<div class="line"><a id="l00015" name="l00015"></a><span class="lineno"><a class="line" href="namespacetmk.html#a8a590bdaf19a5fb7bedb897f1da1d17e">   15</a></span><span class="keyword">inline</span> <span class="keyword">constexpr</span> <span class="keywordtype">int</span> <a class="code hl_variable" href="namespacetmk.html#a8a590bdaf19a5fb7bedb897f1da1d17e">kWorkAccountingVersion</a> = 2;</div>
+<div class="line"><a id="l00016" name="l00016"></a><span class="lineno">   16</span>}  <span class="comment">// namespace tmk</span></div>
 <div class="ttc" id="anamespacetmk_html"><div class="ttname"><a href="namespacetmk.html">tmk</a></div><div class="ttdef"><b>Definition</b> <a href="advice_8hpp_source.html#l00044">advice.hpp:44</a></div></div>
+<div class="ttc" id="anamespacetmk_html_a8a590bdaf19a5fb7bedb897f1da1d17e"><div class="ttname"><a href="namespacetmk.html#a8a590bdaf19a5fb7bedb897f1da1d17e">tmk::kWorkAccountingVersion</a></div><div class="ttdeci">constexpr int kWorkAccountingVersion</div><div class="ttdoc">What one –work expansion unit covers (issue 41).</div><div class="ttdef"><b>Definition</b> <a href="#l00015">version.hpp:15</a></div></div>
 <div class="ttc" id="anamespacetmk_html_aa03a0d691db43504fd8b479a756bea11"><div class="ttname"><a href="namespacetmk.html#aa03a0d691db43504fd8b479a756bea11">tmk::version</a></div><div class="ttdeci">std::string_view version()</div><div class="ttdoc">TraceMaker version string, e.g. &quot;0.1.0&quot;.</div></div>
 </div><!-- fragment --></div><!-- contents -->
 </div><!-- doc-content -->

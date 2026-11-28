@@ -149,6 +149,8 @@ Functions</h2></td></tr>
 Variables</h2></td></tr>
 <tr class="memitem:ad7fdf2341656da85a91722b1b0a7508c" id="r_ad7fdf2341656da85a91722b1b0a7508c"><td class="memItemLeft" align="right" valign="top">constexpr <a class="el" href="#acdd8166e81c544e7a3c2faf32e8147d6">Coord</a>&#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="#ad7fdf2341656da85a91722b1b0a7508c">kNmPerMm</a> = 1'000'000</td></tr>
 <tr class="memitem:a200f23e97201f127c16d8d1877736399" id="r_a200f23e97201f127c16d8d1877736399"><td class="memItemLeft" align="right" valign="top">constexpr <a class="el" href="#acdd8166e81c544e7a3c2faf32e8147d6">Coord</a>&#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="#a200f23e97201f127c16d8d1877736399">kNmPerMil</a> = 25'400</td></tr>
+<tr class="memitem:a8a590bdaf19a5fb7bedb897f1da1d17e" id="r_a8a590bdaf19a5fb7bedb897f1da1d17e"><td class="memItemLeft" align="right" valign="top">constexpr int&#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="#a8a590bdaf19a5fb7bedb897f1da1d17e">kWorkAccountingVersion</a> = 2</td></tr>
+<tr class="memdesc:a8a590bdaf19a5fb7bedb897f1da1d17e"><td class="mdescLeft">&#160;</td><td class="mdescRight">What one &ndash;work expansion unit covers (issue 41).  <br /></td></tr>
 </table>
 <a name="doc-typedef-members" id="doc-typedef-members"></a><h2 id="header-doc-typedef-members" class="groupheader">Typedef Documentation</h2>
 <a id="acdd8166e81c544e7a3c2faf32e8147d6" name="acdd8166e81c544e7a3c2faf32e8147d6"></a>
@@ -376,6 +378,33 @@ Variables</h2></td></tr>
 </div><div class="memdoc">
 
 <p class="definition">Definition at line <a class="el" href="units_8hpp_source.html#l00014">14</a> of file <a class="el" href="units_8hpp_source.html">units.hpp</a>.</p>
+
+</div>
+</div>
+<a id="a8a590bdaf19a5fb7bedb897f1da1d17e" name="a8a590bdaf19a5fb7bedb897f1da1d17e"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#a8a590bdaf19a5fb7bedb897f1da1d17e">&#9670;&#160;</a></span>kWorkAccountingVersion</h2>
+
+<div class="memitem">
+<div class="memproto">
+<table class="mlabels">
+  <tr>
+  <td class="mlabels-left">
+      <table class="memname">
+        <tr>
+          <td class="memname">int tmk::kWorkAccountingVersion = 2</td>
+        </tr>
+      </table>
+  </td>
+  <td class="mlabels-right">
+<span class="mlabels"><span class="mlabel inline">inline</span><span class="mlabel constexpr">constexpr</span></span>  </td>
+  </tr>
+</table>
+</div><div class="memdoc">
+
+<p>What one &ndash;work expansion unit covers (issue 41). </p>
+<p>Version 1 is the upstream 0.12.1 accounting; version 2 folds the pair leg checks and the via-shove / pin-rescue / via-retry work into the expansion count, so a budget calibrated under version 1 buys measurably less search under version 2 (about half the reach on the Nomad reference fixture). Bump this whenever the accounting changes and say so at the &ndash;work entry of the CLI reference; it is emitted in the route JSON as work_accounting_version, next to the expansions count. </p>
+
+<p class="definition">Definition at line <a class="el" href="version_8hpp_source.html#l00015">15</a> of file <a class="el" href="version_8hpp_source.html">version.hpp</a>.</p>
 
 </div>
 </div>

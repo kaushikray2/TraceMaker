@@ -124,8 +124,8 @@ Functions</h2></td></tr>
 <tr class="memdesc:a73ef09b838a1f15a08bc83053aaa92dd"><td class="mdescLeft">&#160;</td><td class="mdescRight">Reads the board and its rules, routes (a portfolio when more than one variant runs), writes the requested outputs.  <br /></td></tr>
 <tr class="memitem:a257511015fa231832028fd1fa05e08ab" id="r_a257511015fa231832028fd1fa05e08ab"><td class="memItemLeft" align="right" valign="top"><a class="el" href="structtmk_1_1app_1_1RouteJobResult.html">RouteJobResult</a>&#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="#a257511015fa231832028fd1fa05e08ab">run_layer_advisor</a> (<a class="el" href="structtmk_1_1app_1_1RouteJob.html">RouteJob</a> job, std::vector&lt; int &gt; counts)</td></tr>
 <tr class="memdesc:a257511015fa231832028fd1fa05e08ab"><td class="mdescLeft">&#160;</td><td class="mdescRight">The layer-count advisor (<span class="tt"><a class="el" href="namespacetmk_1_1route.html">route</a> --try-layers</span>, doc 05 §53, M20 C3): routes the board with each copper layer count in <span class="tt">counts</span>, fewest first, and stops at the first that completes (exit code 0: everything routed and, with soft zones, nothing unconnected after the refill).  <br /></td></tr>
-<tr class="memitem:a4f43dbc2a0c3d43abf0b78a5709d6812" id="r_a4f43dbc2a0c3d43abf0b78a5709d6812"><td class="memItemLeft" align="right" valign="top"><a class="el" href="structtmk_1_1app_1_1RouteJobResult.html">RouteJobResult</a>&#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="#a4f43dbc2a0c3d43abf0b78a5709d6812">run_finish</a> (<a class="el" href="structtmk_1_1app_1_1RouteJob.html">RouteJob</a> job, std::vector&lt; int &gt; extra_layers, bool masks_rung=false, bool fresh_rung=false, bool chains_rung=false, bool guard_walls=false)</td></tr>
-<tr class="memdesc:a4f43dbc2a0c3d43abf0b78a5709d6812"><td class="mdescLeft">&#160;</td><td class="mdescRight"><span class="tt"><a class="el" href="namespacetmk_1_1route.html">route</a> --finish</span> (doc 20 §2.12, D196): rungs that each start from the board the rung before wrote, so what is routed stays routed and only the open connections are searched.  <br /></td></tr>
+<tr class="memitem:a78b7a604f442ef6a84f60834c0b18f39" id="r_a78b7a604f442ef6a84f60834c0b18f39"><td class="memItemLeft" align="right" valign="top"><a class="el" href="structtmk_1_1app_1_1RouteJobResult.html">RouteJobResult</a>&#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="#a78b7a604f442ef6a84f60834c0b18f39">run_finish</a> (<a class="el" href="structtmk_1_1app_1_1RouteJob.html">RouteJob</a> job, std::vector&lt; int &gt; extra_layers, bool masks_rung=false, bool fresh_rung=false, bool chains_rung=false, bool guard_walls=false, bool rip_walls=false)</td></tr>
+<tr class="memdesc:a78b7a604f442ef6a84f60834c0b18f39"><td class="mdescLeft">&#160;</td><td class="mdescRight"><span class="tt"><a class="el" href="namespacetmk_1_1route.html">route</a> --finish</span> (doc 20 §2.12, D196): rungs that each start from the board the rung before wrote, so what is routed stays routed and only the open connections are searched.  <br /></td></tr>
 <tr class="memitem:a735cf82542e6cd4a3cc9c8b04e78d93a" id="r_a735cf82542e6cd4a3cc9c8b04e78d93a"><td class="memItemLeft" align="right" valign="top">std::vector&lt; <a class="el" href="structtmk_1_1route_1_1BusGroup.html">route::BusGroup</a> &gt;&#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="#a735cf82542e6cd4a3cc9c8b04e78d93a">resolve_buses</a> (const <a class="el" href="structtmk_1_1model_1_1Board.html">model::Board</a> &amp;b, const <a class="el" href="structtmk_1_1model_1_1DesignRules.html">model::DesignRules</a> &amp;rules, const std::vector&lt; std::string &gt; &amp;specs, bool detect, double skew_mm, std::vector&lt; std::string &gt; *notes=nullptr)</td></tr>
 <tr class="memdesc:a735cf82542e6cd4a3cc9c8b04e78d93a"><td class="mdescLeft">&#160;</td><td class="mdescRight">Buses (doc 05 §38): the groups <span class="tt">specs</span> ("NAME=PATTERN") name on the board, then, with <span class="tt">detect</span>, the groups found in the net names that share no net with an earlier group.  <br /></td></tr>
 <tr class="memitem:ae70362c5f3d6fb89606b961add6816d8" id="r_ae70362c5f3d6fb89606b961add6816d8"><td class="memItemLeft" align="right" valign="top">nlohmann::json&#160;</td><td class="memItemRight" valign="bottom"><a class="el" href="#ae70362c5f3d6fb89606b961add6816d8">bus_report</a> (const <a class="el" href="structtmk_1_1model_1_1Board.html">model::Board</a> &amp;b, const <a class="el" href="structtmk_1_1model_1_1DesignRules.html">model::DesignRules</a> &amp;rules, const std::vector&lt; std::uint8_t &gt; &amp;joined, const <a class="el" href="structtmk_1_1route_1_1BusGroup.html">route::BusGroup</a> &amp;g, std::string *line=nullptr)</td></tr>
@@ -414,8 +414,8 @@ Functions</h2></td></tr>
 
 </div>
 </div>
-<a id="a4f43dbc2a0c3d43abf0b78a5709d6812" name="a4f43dbc2a0c3d43abf0b78a5709d6812"></a>
-<h2 class="memtitle"><span class="permalink"><a href="#a4f43dbc2a0c3d43abf0b78a5709d6812">&#9670;&#160;</a></span>run_finish()</h2>
+<a id="a78b7a604f442ef6a84f60834c0b18f39" name="a78b7a604f442ef6a84f60834c0b18f39"></a>
+<h2 class="memtitle"><span class="permalink"><a href="#a78b7a604f442ef6a84f60834c0b18f39">&#9670;&#160;</a></span>run_finish()</h2>
 
 <div class="memitem">
 <div class="memproto">
@@ -448,7 +448,12 @@ Functions</h2></td></tr>
         <tr>
           <td class="paramkey"></td>
           <td></td>
-          <td class="paramtype">bool</td>          <td class="paramname"><span class="paramname"><em>guard_walls</em></span><span class="paramdefsep"> = </span><span class="paramdefval">false</span>&#160;)</td>
+          <td class="paramtype">bool</td>          <td class="paramname"><span class="paramname"><em>guard_walls</em></span><span class="paramdefsep"> = </span><span class="paramdefval">false</span>, </td>
+        </tr>
+        <tr>
+          <td class="paramkey"></td>
+          <td></td>
+          <td class="paramtype">bool</td>          <td class="paramname"><span class="paramname"><em>rip_walls</em></span><span class="paramdefsep"> = </span><span class="paramdefval">false</span>&#160;)</td>
         </tr>
       </table>
 </div><div class="memdoc">

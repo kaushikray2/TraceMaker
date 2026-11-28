@@ -7,6 +7,7 @@ var classtmk_1_1io_1_1BoardEditor =
     [ "flip_footprint", "classtmk_1_1io_1_1BoardEditor.html#a3fcb6245774a695124242467f1e5eb1c", null ],
     [ "move_footprint", "classtmk_1_1io_1_1BoardEditor.html#a97c49209eb7bdeed416b64a3244f49a4", null ],
     [ "next_uuid", "classtmk_1_1io_1_1BoardEditor.html#a6423a0fabd9e9c25587c3b41e28a93fd", null ],
+    [ "remove_arc", "classtmk_1_1io_1_1BoardEditor.html#aa3095cf7015ffa53a0272ec8d36b194a", null ],
     [ "remove_track", "classtmk_1_1io_1_1BoardEditor.html#ab4ac7f2dd0508750ebf45b7da8461b9d", null ],
     [ "remove_via", "classtmk_1_1io_1_1BoardEditor.html#ab5dcb1f0fde69cb4a084f9c60e2911ac", null ],
     [ "save", "classtmk_1_1io_1_1BoardEditor.html#a4dc9e55f77fdbdce3f91a5671c18f19b", null ],
