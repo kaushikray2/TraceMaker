@@ -76,3 +76,22 @@ tests/test_passes.cpp [passes][stitch], on the synthetic two-plane board:
   count and the per-half rows of the pass can therefore both describe one transition twice;
   pair_stitch_vias in the summary is the transition-level number.
 - Items (b) and (c) — see the inventory for their starting points.
+
+## Verification record (2026-11-28, build RelWithDebInfo, CUDA off)
+
+- Unit: [passes][stitch] 11 cases / 5997 assertions pass (3 new cases from this slice).
+- Full ctest: 535 tests, 0 failed (two rounds; the determinism gate seed_determinism passed
+  in 558.9 s and deterministic_mode in 512.5 s once the canonical bench/data symlink was in
+  place; remaining skips are GPU-off and fixture-set absences of the shared data root,
+  identical on the base commit).
+- Engineered board (PCBench 4-port USB hub, plugin flag mix, --stitch-return D*=GND): arms
+  without/with the flag and repeats are byte-identical (the five pairs make no layer
+  transition on this 2-layer board: 0 pair vias, pair_stitch_vias 0); drc_judge added_errors
+  is zero for both arms, error_gate pass.
+- Job level (synthetic pair-transition board through the route command): with the flag, one
+  return-path via serves the transition (both halves 0 stitched before, 1 after;
+  pair_stitch_vias 1); without it, the legacy per-via placement runs (pair_stitch_vias 0).
+- Pre-existing quirk found, NOT introduced by this slice (the legacy path behaves the same):
+  on a board with nothing to route, stitch vias are reported in the summary but not written
+  to the output board file. On routed boards the after_route_passes integration test covers
+  stitch vias reaching the file. Flagged for the programme as its own issue candidate.
