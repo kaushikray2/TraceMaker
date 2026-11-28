@@ -510,6 +510,7 @@ struct Router::Impl {
   live::Slot* lslot = nullptr;  // this router's row on the live page (nullptr: not shown)
   Impl(const model::Board& in, const model::DesignRules& r, const RouterOptions& o) : rules(r), opt(o), b(in) {
     lslot = live::slot(opt.live_name.empty() ? "router" : opt.live_name);
+    via_cost_mult = std::max(0.0, o.via_search_mult);  // issue 67: the routing via price (clean-up stages set their own)
     // Advice regions and other in-memory rule areas: part of the working copy only, so every obstacle test sees them.
     b.zones.insert(b.zones.end(), opt.extra_zones.begin(), opt.extra_zones.end());
     // Name-pattern matching is too costly for per-cell lookups.
@@ -3290,7 +3291,7 @@ struct Router::Impl {
   Coord micro_drill(NetId net) const { return std::max(netclass(net).uvia_drill, rules.minimums.microvia_drill); }
   bool blind_ok = false;    // blind/buried vias allowed (board setting, more than two layers)
   bool fields_off = false;
-  double via_cost_mult = 1.0;   // raised by the clean-up pass
+  double via_cost_mult = 1.0;   // the search via-price multiplier: opt.via_search_mult while routing, raised by the clean-up pass
   bool via_retry_on = false;    // the search under way is a via retry (its own nogoods)
   bool bypass_nogoods = false;  // clean-up re-routes are judged on their own  // set when GPU fields cost too much wall-clock time (see search)
   int rip_cap = 0;  // per-connection rip limit (opt.max_rips_per_connection, raised by diversified restarts)
@@ -6348,7 +6349,7 @@ struct Router::Impl {
         st.items.push_back(id);
       }
     }
-    via_cost_mult = 1.0;
+    via_cost_mult = opt.via_search_mult;
     bypass_nogoods = false;
   }
 
@@ -6460,7 +6461,7 @@ struct Router::Impl {
         }
       }
     }
-    via_cost_mult = 1.0;
+    via_cost_mult = opt.via_search_mult;
     bypass_nogoods = false;
     return improved;
   }

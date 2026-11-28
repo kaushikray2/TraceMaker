@@ -1177,6 +1177,9 @@ static int run_main(int argc, char** argv) {
   route->add_option("--guide-pen", ropt.guide_pen, "Guide: pitches per lattice step off the guide")->group("");
   route->add_option("--guide-radius", ropt.guide_radius, "Guide: pitches around the guide that count as on it")->group("");
   route->add_option("--via-cost-mm", ropt.via_cost_mm, "Cost of a via as equivalent track length");
+  route->add_option("--via-search-mult", ropt.via_search_mult, "Multiplier on --via-cost-mm in the detailed searches only (via step, field, via drops, via-in-pad); the clean-up keeps its own price; 1 = the price it was")
+      ->check(CLI::Range(0.0, 100.0))
+      ->group("");
   route->add_option("--order", ropt.order, "Connection order: 0 shortest first, 1 longest first, 2 jittered, 3 deep package pins first, 4 most crossings first")->group("");
   route->add_option("--order-all", ropt.order_all, "Portfolio: use this connection order (as --order) in every variant, not each variant's own")->group("");
   route->add_option("--seed", ropt.seed);

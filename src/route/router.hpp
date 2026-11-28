@@ -92,6 +92,10 @@ struct RouterOptions {
   int max_attempts = 4;         // per connection (window growth and learned blocks between attempts)
   int soft_attempts = 3;        // window sizes tried by negotiated searches
   double via_cost_mm = 3.0;     // equivalent track length of one via
+  double via_search_mult = 1.0;  // issue 67 (Phase 4A slice 2): multiplier on via_cost_mm in the detailed searches
+                                 // (the A* via step, the cost-to-go field, via drops and via-in-pad endpoints), set
+                                 // from Impl::via_cost_mult while routing. The clean-up re-routes keep their own x10
+                                 // search price, and coupled pairs keep 2 * via_cost_mm flat. 1.0 = the price it was.
   bool allow_vias = true;
   bool via_retry = false;       // D153 (M22 item 5): a search that stopped at its expansion cap is searched again at once with cheap vias and its busiest layer dearer
   double polish_fraction = 0;   // share of the budget reserved for rebuilding the open connections of the best state (doc 16)
