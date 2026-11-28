@@ -74,3 +74,75 @@ endpoints in place (connection count per net is invariant: contracting a tree al
 leaves exactly the open edges as the spanning forest). Counters in RouteResult (redecomp_rounds,
 redecomp_changed) and a stage event per round. Deterministic: weights are pure functions of the
 history map contents (lookups, never iteration order), Prim scans in fixed index order.
+
+## 5. What the bench actually does (protocol findings, measured 2026-11-28)
+
+Three trigger designs were tried; the first two never fire on real boards, and the reasons are
+structural, not tuning:
+
+- Pass boundaries: under a --work budget every variant runs passes = 1, restarts = 0 (probes on
+  EtherCAT and poncho at 10M and 60M work, variants 1). The pass while-loop requeues rip victims
+  inside the same pass and pass_quota is unbounded unless --pass-bound, so the whole budget is
+  consumed inside pass 0/1. A pass >= 2 boundary is never reached.
+- Attempt cadence (every 250 connection attempts): the first cadence point lands inside the strict
+  first pass, which by construction builds no PathFinder history (bump_history records only rips
+  during soft/negotiated searches), so the re-plan no-ops; and the stages that do negotiate (warm
+  rescue/rounds stages) make fewer than 250 attempts each. On EtherCAT at 10M the main stage spends
+  its entire budget in ~256 strict attempts and never negotiates at all.
+- Unseeded comparisons are not measurements: without an explicit --seed the job is not under the
+  deterministic contract (summary deterministic: false), the rescue stage races, and the same binary
+  produced EtherCAT 10M routed counts of 232, 158 and 111 across runs. All A/B numbers below use
+  --seed 1 (deterministic: true, kb_used: false, time_limited: false in every summary).
+
+Shipped trigger set (commit 48c497cd): pass boundaries every N passes, every restart, and a
+history-growth trigger inside the pass loop - re-plan once the history map holds 16 contested
+cells, then whenever it has grown by half again (at least 64 cells) since the last round. The
+congestion term in the edge weight is capped at 10% of the geometric base: the straight-line
+history sample is a proxy for routed path cost, so congestion re-ranks near-equal pairings but
+never overrides geometry. RouteResult counters are aggregated across route_job stages (stages
+replace res wholesale; a later rescue JOB still supersedes the main job summary, so on rescued
+boards the counters are read from TM_DEBUG_REDECOMP round lines instead).
+
+## 6. A/B results (seeded, --variants 1 --threads 4 --no-gpu, --redecompose 1 vs off)
+
+DRC judged on the ML350 (kicad-cli 10.0.8, drc_judge JUDGE_FLAGS, no refill): every output below
+has added_errors {} and error_gate pass against its own fixture baseline.
+
+| board | work | off routed/open | on routed/open | wall off/on (s) | rounds / re-paired |
+|---|---|---|---|---|---|
+| EtherCAT_shield | 10M | 232/40 | 232/40 | 29.3/28.8 | 2 rounds, 0 changed |
+| EtherCAT_shield | 60M | 236/36 | 239/33 | 179.1/180.0 | ~50 rounds across stages, 16 changed |
+| kitspace_d20 | 10M | 243/310 | 243/310 | 42.8/44.0 | no round (max 11 history cells in any stage) |
+| kitspace_d20 | 60M | 386/167 | 386/167 | 235.1/237.1 | 4 rounds (one per stage), 156 changed |
+
+Notes:
+- DRC unconnected items track the router open counts except EtherCAT 60M on (router 33 open vs
+  35 unconnected items; the off arm agrees at 36/36), so by the DRC ground truth that arm gain is
+  36 -> 35 rather than 36 -> 33. Either way: no regression, zero added errors.
+- d20 re-pairs heavily (156 connections) with zero completion delta at 60M: the re-plan reshuffles
+  which connections route, not how many. EtherCAT gains +3 routed. The effect at these budgets is
+  real but small and board-dependent; the machinery (live contraction, priced Prim, deterministic
+  triggers and counters) is the deliverable of this slice.
+- An earlier unseeded portfolio A/B at 60M (run.py, 6 boards) is NOT evidence: it ran the
+  pass-trigger-only build in which the mechanism never fired, and both arms totalled 397 opens.
+
+## 7. Verification
+
+- tests/test_redecomp.cpp: flag-on legality + thread-count invariance (threads 1 vs 4 identical
+  routed/tracks/vias/expansions/redecomp_changed), flag-off rounds == 0 and byte-identical
+  behaviour. Known limitation (in the test file): no stable synthetic board negotiates long
+  enough with a multi-pin net open to assert rounds > 0 in a unit test; firing is proven by the
+  bench round lines above instead.
+- Full ctest on the final build: 534/534 passed (532 baseline + 2 new), seed_determinism included.
+- Flag off is byte-identical: the seeded 10M EtherCAT off/on boards at changed == 0 are the same
+  bytes; every code path is gated on redecomp_every > 0.
+
+## 8. Recommended next slice
+
+1. Carry the re-plan into the rounds/rescue jobs explicitly (they decide rescued boards and run
+   their own Impls; the flag already reaches them via job options, but the summary counters do
+   not survive a superseding rescue job - aggregate at the CLI job-sequence level).
+2. Price edges with routed-path cost instead of the straight-line sample (reuse the search cost
+   of the incumbent pairing as the baseline the challenger must beat), then re-run the 60M pair
+   plus poncho and sizif at the full portfolio before judging the weight cap.
+3. Pin/gate swapping stays NOT viable as an engine slice (section 3 oracle ceiling).
