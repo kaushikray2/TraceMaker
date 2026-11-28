@@ -2,6 +2,7 @@
 #include "passes/stitch.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <map>
 #include <set>
 #include <tuple>
@@ -223,6 +224,94 @@ StitchResult stitch_vias(const model::Board& board, const model::DesignRules& ru
           bool blocked = false;
           if (!try_place(net, p, false, &blocked) && blocked) ++res.site_blocked;
         }
+    }
+  }
+
+  // Pair transitions (Phase 4C, issue #69): one stitch via per layer transition of a differential
+  // pair, searched on rings around the midpoint of the two signal vias of the transition, so the
+  // via lies within the distance of both halves (TI SPRAAR7J section 2: the stitching vias sit
+  // symmetrically within 200 mil, centre to centre, of the signal transition vias). A transition
+  // with no joint site keeps the per-via treatment below.
+  if (opt.pair_transitions) {
+    std::vector<std::pair<NetId, NetId>> pairs = opt.pairs;
+    std::sort(pairs.begin(), pairs.end());
+    pairs.erase(std::unique(pairs.begin(), pairs.end()), pairs.end());
+    for (const auto& [na, nb] : pairs) {
+      // The returns entry of each half for one shared plane: the first plane both halves name.
+      const StitchOptions::ReturnNet *ea = nullptr, *eb = nullptr;
+      for (const auto& r : opt.returns) {
+        if (ea || r.signal != na) continue;
+        for (const auto& s : opt.returns)
+          if (s.signal == nb && s.plane == r.plane) {
+            ea = &r;
+            eb = &s;
+            break;
+          }
+      }
+      if (!ea || !eb || ea->plane <= 0 || ea->plane == na || ea->plane == nb) continue;
+      const NetId plane = ea->plane;
+      const Coord dist = std::min(ea->distance, eb->distance);
+      if (dist <= 0) continue;
+      std::vector<const model::Via*> va_list, vb_list;
+      for (const auto& v : board.vias) {
+        if (v.net == na) va_list.push_back(&v);
+        if (v.net == nb) vb_list.push_back(&v);
+      }
+      const auto by_pos = [](const model::Via* a, const model::Via* b) {
+        return std::tie(a->pos.x, a->pos.y) < std::tie(b->pos.x, b->pos.y);
+      };
+      std::sort(va_list.begin(), va_list.end(), by_pos);
+      std::sort(vb_list.begin(), vb_list.end(), by_pos);
+      const model::Via proto = via_for(plane, {});
+      const Coord gap = std::max({rules.class_for(w.nets[static_cast<std::size_t>(na)].name).clearance,
+                                  rules.class_for(w.nets[static_cast<std::size_t>(nb)].name).clearance,
+                                  rules.class_for(w.nets[static_cast<std::size_t>(plane)].name).clearance});
+      std::vector<char> used(vb_list.size(), 0);
+      for (const model::Via* va : va_list) {
+        if (res.out_of_work) break;
+        // The other half of the transition: the nearest unused via of the partner whose centre is
+        // within the sum of the two via diameters (the signature of two vias placed together for
+        // one layer change; anything farther apart is two independent vias).
+        const model::Via* vb = nullptr;
+        std::size_t vb_i = 0;
+        geom::i128 vb_d2 = 0;
+        for (std::size_t i = 0; i < vb_list.size(); ++i) {
+          if (used[i]) continue;
+          const geom::i128 dx = va->pos.x - vb_list[i]->pos.x, dy = va->pos.y - vb_list[i]->pos.y, d2 = dx * dx + dy * dy;
+          const geom::i128 bound = static_cast<geom::i128>(va->size + vb_list[i]->size);
+          if (d2 <= bound * bound && (!vb || d2 < vb_d2)) vb = vb_list[i], vb_i = i, vb_d2 = d2;
+        }
+        if (!vb) continue;
+        if (tied(ties, plane, va->pos, dist) && tied(ties, plane, vb->pos, dist)) {
+          used[vb_i] = 1;  // a plane via or plated pad already serves the transition
+          continue;
+        }
+        // Half the centre distance, rounded up at both steps so the ring bounds stay safe.
+        Coord span = static_cast<Coord>(std::sqrt(static_cast<double>(vb_d2)));
+        while (static_cast<geom::i128>(span) * span < vb_d2) ++span;
+        while (span > 0 && static_cast<geom::i128>(span - 1) * (span - 1) >= vb_d2) --span;
+        const Coord half = (span + 1) / 2;
+        const Point mid{(va->pos.x + vb->pos.x) / 2, (va->pos.y + vb->pos.y) / 2};
+        // A candidate on a ring of radius r around the midpoint is at most r + half from either
+        // via and at least r - half: r0 keeps it clear of the copper of both vias, r1 keeps it
+        // within the distance of both. The exact tests in the loop and in try_place decide.
+        const Coord r0 = half + std::max(va->size, vb->size) / 2 + proto.size / 2 + gap + kPlaceMargin;
+        const Coord r1 = dist - half;
+        const Coord step = std::max<Coord>(proto.size / 2, 100000);
+        bool placed = false;
+        for (Coord r = r0; r <= r1 && !placed && !res.out_of_work; r += step)
+          for (int d = 0; d < 16 && !placed && !res.out_of_work; ++d) {
+            Point p{mid.x + r * kDirs[d][0] / 1000, mid.y + r * kDirs[d][1] / 1000};
+            p.x -= p.x % 1000;  // whole micrometres, as the per-via search
+            p.y -= p.y % 1000;
+            if (!within(p, va->pos, dist) || !within(p, vb->pos, dist)) continue;
+            placed = try_place(plane, p, true, nullptr);
+          }
+        if (placed) {
+          ++res.pair_stitches;
+          used[vb_i] = 1;
+        }
+      }
     }
   }
 

@@ -2019,6 +2019,19 @@ RouteJobResult run_route_job(RouteJob job) {
       so.planes = stitch_planes;
       so.pitch = static_cast<Coord>((job.stitch_pitch_mm > 0 ? job.stitch_pitch_mm : crules::builtin_catalogue().stitch_via_within_mm) * 1e6);
       so.returns = returns;
+      so.pair_transitions = job.stitch_pair_transitions;
+      if (so.pair_transitions) {
+        // The pairs whose transitions are stitched jointly: both halves must ask for return stitching
+        // (any source); the pass matches them to a shared plane.
+        const drc::RuleEngine re_stitch(lb.board, rules);
+        for (const auto& pr : route::named_pairs(lb.board, re_stitch)) {
+          const auto asks = [&](model::NetId n) {
+            return std::any_of(returns.begin(), returns.end(),
+                               [&](const passes::StitchOptions::ReturnNet& r) { return r.signal == n; });
+          };
+          if (asks(pr.first) && asks(pr.second)) so.pairs.push_back(pr);
+        }
+      }
       so.work_limit = job.pass_work;
       model::Board bd = *route_board;
       bd.tracks.insert(bd.tracks.end(), res.tracks.begin(), res.tracks.end());
@@ -2062,8 +2075,10 @@ RouteJobResult run_route_job(RouteJob job) {
               grid, ret, sr.sites, sr.site_served, sr.site_blocked, sr.dropped, sr.checks, sr.out_of_work ? " (work budget used up)" : "",
               sr.discarded ? "; withdrawn: the refill with the vias cut a fill"
               : !sr.vias.empty() && !kept ? fmt("; discarded: a net has more unconnected items with them (%d in all, %d without)", after, before).c_str() : ""));
+      if (sr.pair_stitches > 0)
+        log(fmt("  stitch: %d pair-transition stitch via%s, one per transition, placed symmetrically", sr.pair_stitches, sr.pair_stitches == 1 ? "" : "s"));
       stitch_summary = {{"plane_vias", grid}, {"return_path_vias", ret}, {"sites", sr.sites}, {"sites_already_tied", sr.site_served},
-                        {"sites_blocked", sr.site_blocked}, {"dropped", sr.dropped}, {"checks", sr.checks}, {"out_of_work", sr.out_of_work},
+                        {"sites_blocked", sr.site_blocked}, {"pair_stitch_vias", sr.pair_stitches}, {"dropped", sr.dropped}, {"checks", sr.checks}, {"out_of_work", sr.out_of_work},
                         {"kept", kept}, {"pitch_mm", nm_to_mm(so.pitch)}, {"nets", nets}, {"return_paths", rets}};
       if (kept) {
         for (std::size_t i = 0; i < sr.vias.size(); ++i) {

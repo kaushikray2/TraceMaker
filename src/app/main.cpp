@@ -1587,6 +1587,8 @@ static int run_main(int argc, char** argv) {
   route->add_option("--stitch-distance", r_job.stitch_distance_mm, "Return-path stitching: largest distance from a signal via to its plane via, mm (default: the rule's, else 5.08)")
       ->check(CLI::PositiveNumber);
   route->add_option("--stitch-return", r_job.stitch_returns, "Return-path stitching for nets as PATTERN=PLANE_NET, e.g. 'USB_D*=GND' (repeatable). Return-path stitching from component rules is experimental");
+  route->add_flag("--stitch-pair-transitions", r_job.stitch_pair_transitions,
+                  "Return-path stitching: one plane via per differential-pair layer transition, placed symmetrically between the two signal vias (TI SPRAAR7J section 2; Phase 4C, issue #69)");
   route->add_option("--pass-work", r_job.pass_work, "Work budget of each after-route pass, in exact checks (default 2,000,000)")->check(CLI::PositiveNumber);
 
   auto* batch_cmd = app.add_subcommand("route-batch", "Route every board of a JSON manifest in one process, through one global thread pool (issue #22)");
